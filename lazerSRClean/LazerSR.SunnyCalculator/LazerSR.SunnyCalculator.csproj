@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- osu! references: compile-time only, never copied to output -->
+    <ProjectReference Include="..\..\osu\osu.Game\osu.Game.csproj"
+                      Private="false" ReferenceOutputAssembly="true" />
+    <ProjectReference Include="..\..\osu\osu.Game.Rulesets.Mania\osu.Game.Rulesets.Mania.csproj"
+                      Private="false" ReferenceOutputAssembly="true" />
+  </ItemGroup>
+</Project>

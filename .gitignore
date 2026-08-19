@@ -1,0 +1,15 @@
+# 빌드 산출물 (재생성 가능)
+**/bin/
+**/obj/
+installer/output/
+
+# IDE / OS
+.vs/
+.idea/
+*.user
+Thumbs.db
+.DS_Store
+
+# 참조용으로 복사해둔 남의 저장소 - lazerSRClean 빌드에 안 쓰인다 (osu\, sunnyosu\는 유지)
+enissayosu/
+minacalc/

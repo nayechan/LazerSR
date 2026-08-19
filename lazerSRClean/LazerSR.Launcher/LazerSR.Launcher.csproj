@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSelfContained>true</PublishSelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LazerSR.Hook\LazerSR.Hook.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\LazerSR.Hook\MinaCalc.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <Target Name="RemoveOsuAssembliesFromLauncherOutput" AfterTargets="ResolveReferences">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" Condition="$([System.String]::Copy('%(ReferenceCopyLocalPaths.Filename)').ToLowerInvariant().StartsWith('osu')) And '%(ReferenceCopyLocalPaths.Extension)' == '.dll'" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="RemoveOsuAssembliesFromLauncherPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(ResolvedFileToPublish.Filename)').ToLowerInvariant().StartsWith('osu')) And ('%(ResolvedFileToPublish.Extension)' == '.dll' Or '%(ResolvedFileToPublish.Extension)' == '.xml' Or '%(ResolvedFileToPublish.Extension)' == '.pdb')" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="ExcludeHookDepsFromSingleFile"
+          AfterTargets="ComputeResolvedFilesToPublishList"
+          BeforeTargets="_ComputeResolvedFilesToPublishTypes">
+    <ItemGroup>
+      <_HookFiles Include="@(ResolvedFileToPublish)"
+          Condition="('%(ResolvedFileToPublish.Filename)' == 'LazerSR.Hook'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'LazerSR.SunnyCalculator'
+                   Or '%(ResolvedFileToPublish.Filename)' == '0Harmony'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MonoMod.Backports'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MonoMod.Core'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MonoMod.Iced'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MonoMod.ILHelpers'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MonoMod.RuntimeDetour'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MonoMod.Utils'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'Mono.Cecil'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'Mono.Cecil.Mdb'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'Mono.Cecil.Pdb'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'Mono.Cecil.Rocks'
+                   Or '%(ResolvedFileToPublish.Filename)' == 'MinaCalc')
+                   And ('%(ResolvedFileToPublish.Extension)' == '.dll')" />
+      <ResolvedFileToPublish Remove="@(_HookFiles)" />
+      <ResolvedFileToPublish Include="@(_HookFiles)" ExcludeFromSingleFile="true" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\osu\osu.Game\osu.Game.csproj" Private="false" ReferenceOutputAssembly="true" />
+    <ProjectReference Include="..\..\osu\osu.Game.Rulesets.Mania\osu.Game.Rulesets.Mania.csproj" Private="false" ReferenceOutputAssembly="true" />
+  </ItemGroup>
+</Project>

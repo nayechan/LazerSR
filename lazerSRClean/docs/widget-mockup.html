@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Replay Compare Widget Mockup</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a2e;
+    color: #eee;
+    font-family: 'Segoe UI', sans-serif;
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* ── LEFT: controls ── */
+  #controls {
+    width: 280px;
+    min-width: 280px;
+    background: #12122a;
+    padding: 20px 16px;
+    overflow-y: auto;
+    border-right: 1px solid #2a2a4a;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  #controls h2 { font-size: 13px; color: #aaa; letter-spacing: 1px; text-transform: uppercase; }
+  .section-title {
+    font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #222244;
+  }
+  .ctrl-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 9px; gap: 8px;
+  }
+  .ctrl-row label { font-size: 12px; color: #ccc; flex: 1; white-space: nowrap; }
+  .ctrl-row input[type=range] { flex: 1.4; accent-color: #7c7cff; cursor: pointer; }
+  .ctrl-row input[type=checkbox] { width: 15px; height: 15px; accent-color: #7c7cff; cursor: pointer; }
+  .val { font-size: 11px; color: #7c7cff; min-width: 28px; text-align: right; }
+
+  .toggle-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px;
+  }
+  .toggle-item {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; color: #ccc;
+  }
+  .toggle-item input { accent-color: #7c7cff; cursor: pointer; }
+
+  #export-btn {
+    width: 100%; padding: 10px; background: #5a5aff; color: #fff;
+    border: none; border-radius: 6px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  #export-btn:hover { background: #7a7aff; }
+  #export-output {
+    margin-top: 10px; background: #0d0d1f; border: 1px solid #3a3a5a;
+    border-radius: 6px; padding: 10px; font-size: 10px; color: #aaf;
+    white-space: pre-wrap; word-break: break-all; display: none;
+    max-height: 240px; overflow-y: auto;
+  }
+
+  /* ── RIGHT: preview ── */
+  #preview-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 40px 20px;
+    overflow-y: auto;
+  }
+  #preview-label { font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 24px; }
+
+  #preview-bg {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 20px;
+    border-radius: 8px;
+    background: radial-gradient(ellipse at center, #1a1030 0%, #080812 100%);
+  }
+
+  #widget-inner {
+    overflow: hidden;
+    transition: all 0.15s;
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════ CONTROLS ══════════ -->
+<div id="controls">
+  <h2>위젯 상세설정</h2>
+
+  <div>
+    <div class="section-title">표시 옵션</div>
+
+    <div class="ctrl-row">
+      <label>투명도 %</label>
+      <input type="range" id="ctrl-opacity" min="0" max="100" value="54">
+      <span class="val" id="val-opacity">54</span>
+    </div>
+    <div class="ctrl-row">
+      <label>값 크기 px</label>
+      <input type="range" id="ctrl-value-size" min="8" max="24" value="15">
+      <span class="val" id="val-value-size">15</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Diff 크기 px</label>
+      <input type="range" id="ctrl-diff-size" min="10" max="40" value="26">
+      <span class="val" id="val-diff-size">26</span>
+    </div>
+    <div class="ctrl-row">
+      <label>행 간격 px</label>
+      <input type="range" id="ctrl-row-gap" min="2" max="20" value="6">
+      <span class="val" id="val-row-gap">6</span>
+    </div>
+    <div class="ctrl-row">
+      <label>구분선 표시</label>
+      <input type="checkbox" id="ctrl-divider" checked>
+      <span class="val"></span>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-title">행 표시 여부</div>
+    <div class="toggle-grid">
+      <div class="toggle-item"><input type="checkbox" data-row="header" checked><label>헤더</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="score" checked><label>Score</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="acc" checked><label>Acc</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="pp" checked><label>PP</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="j320" checked><label>320</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="j300" checked><label>300</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="j200" checked><label>200</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="j100" checked><label>100</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="j50" checked><label>50</label></div>
+      <div class="toggle-item"><input type="checkbox" data-row="miss" checked><label>Miss</label></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-title">확정</div>
+    <button id="export-btn">설정 내보내기 (JSON)</button>
+    <pre id="export-output"></pre>
+  </div>
+</div>
+
+<!-- ══════════ PREVIEW ══════════ -->
+<div id="preview-area">
+  <div id="preview-label">Widget Preview</div>
+  <div id="preview-bg">
+    <div id="widget-inner"></div>
+  </div>
+</div>
+
+<script>
+// ── base config from mockup.json (hardcoded) ──
+const BASE = {
+  widgetBg:     "#000000",
+  borderRadius: 10,
+  borderWidth:  1,
+  borderColor:  "#444466",
+  padding:      10,
+  width:        284,
+  fontFamily:   "'Segoe UI', sans-serif",
+  headerSize:   14,
+  headerColor:  "#aaaacc",
+  valueColor:   "#eeeeee",
+  posColor:     "#4499ff",
+  negColor:     "#ff4444",
+  zeroColor:    "#888888",
+  dividerColor: "#333355",
+};
+
+// ── sample data (winning preset from mockup.json) ──
+// acc / pp 하드코딩: 100
+const DATA = {
+  date:   '2024-11-20',
+  live:   { score: 987543, acc: 100, pp: 100, j320: 1502, j300: 87, j200: 23, j100: 8, j50: 1, miss: 0 },
+  replay: { score: 965210, acc: 100, pp: 100, j320: 1451, j300: 99, j200: 31, j100: 14, j50: 3, miss: 2 }
+};
+
+// ── helpers ──
+function hexAlpha(hex, pct) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${pct/100})`;
+}
+function diffColor(val, inverted, c) {
+  if (val === 0) return c.zeroColor;
+  if (!inverted) return val > 0 ? c.posColor : c.negColor;
+  else           return val > 0 ? c.negColor : c.posColor;
+}
+function fmtScore(n) { return n.toLocaleString(); }
+function fmtAcc(v)   { return v.toFixed(2) + '%'; }
+function fmtPP(v)    { return v.toFixed(1) + 'pp'; }
+function sgn(v, fmt) {
+  if (v === 0) return '±0' + (fmt === 'acc' ? '.00%' : fmt === 'pp' ? '.0pp' : '');
+  const s = v > 0 ? '+' : '';
+  if (fmt === 'acc') return s + v.toFixed(2) + '%';
+  if (fmt === 'pp')  return s + v.toFixed(1) + 'pp';
+  if (fmt === 'score') return s + v.toLocaleString();
+  return s + v;
+}
+
+// ── get user options ──
+function opts() {
+  const rows = {};
+  document.querySelectorAll('[data-row]').forEach(el => { rows[el.dataset.row] = el.checked; });
+  return {
+    opacity:   +document.getElementById('ctrl-opacity').value,
+    valueSize: +document.getElementById('ctrl-value-size').value,
+    diffSize:  +document.getElementById('ctrl-diff-size').value,
+    rowGap:    +document.getElementById('ctrl-row-gap').value,
+    divider:    document.getElementById('ctrl-divider').checked,
+    rows,
+  };
+}
+
+// ── render ──
+function render() {
+  const o = opts();
+  const c = BASE;
+  const d = DATA;
+
+  const div = o.divider ? `border-bottom:1px solid ${c.dividerColor};` : '';
+  const valPB = `padding-bottom:${o.rowGap/2}px;`;
+
+  function headerRow() {
+    if (!o.rows.header) return '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;
+                margin-bottom:${o.rowGap}px;${valPB}${div}">
+      <span style="font-size:${c.headerSize}px;color:${c.headerColor};font-weight:600;letter-spacing:1px;">Live</span>
+      <span style="font-size:${c.headerSize}px;color:${c.headerColor};opacity:0.65;">${d.date}</span>
+    </div>`;
+  }
+
+  function dataRow(liveStr, replayStr, diffStr, diffVal, inverted, rowKey) {
+    if (!o.rows[rowKey]) return '';
+    const dc = diffColor(diffVal, inverted, c);
+    return `<div style="display:flex;align-items:center;justify-content:space-between;
+                margin-bottom:${o.rowGap}px;${valPB}${div}">
+      <span style="font-size:${o.valueSize}px;color:${c.valueColor};flex:1;text-align:left;">${liveStr}</span>
+      <span style="font-size:${o.diffSize}px;color:${dc};font-weight:700;flex:1;text-align:center;line-height:1;">${diffStr}</span>
+      <span style="font-size:${o.valueSize}px;color:${c.valueColor};flex:1;text-align:right;opacity:0.7;">${replayStr}</span>
+    </div>`;
+  }
+
+  const L = d.live, R = d.replay;
+  const scoreDiff = L.score - R.score;
+  const accDiff   = +(L.acc - R.acc).toFixed(2);
+  const ppDiff    = +(L.pp  - R.pp ).toFixed(1);
+
+  let html = headerRow();
+  html += dataRow(fmtScore(L.score), fmtScore(R.score), sgn(scoreDiff,'score'), scoreDiff, false, 'score');
+  html += dataRow(fmtAcc(L.acc),     fmtAcc(R.acc),     sgn(accDiff,'acc'),     accDiff,   false, 'acc');
+  html += dataRow(fmtPP(L.pp),       fmtPP(R.pp),       sgn(ppDiff,'pp'),       ppDiff,    false, 'pp');
+  html += dataRow(L.j320, R.j320, sgn(L.j320-R.j320), L.j320-R.j320, false, 'j320');
+  html += dataRow(L.j300, R.j300, sgn(L.j300-R.j300), L.j300-R.j300, true,  'j300');
+  html += dataRow(L.j200, R.j200, sgn(L.j200-R.j200), L.j200-R.j200, true,  'j200');
+  html += dataRow(L.j100, R.j100, sgn(L.j100-R.j100), L.j100-R.j100, true,  'j100');
+  html += dataRow(L.j50,  R.j50,  sgn(L.j50 -R.j50 ), L.j50 -R.j50,  true,  'j50');
+  html += dataRow(L.miss, R.miss, sgn(L.miss-R.miss),  L.miss-R.miss, true,  'miss');
+
+  const wi = document.getElementById('widget-inner');
+  wi.style.background   = hexAlpha(c.widgetBg, o.opacity);
+  wi.style.borderRadius = c.borderRadius + 'px';
+  wi.style.border       = `${c.borderWidth}px solid ${c.borderColor}`;
+  wi.style.padding      = c.padding + 'px';
+  wi.style.width        = c.width + 'px';
+  wi.style.fontFamily   = c.fontFamily;
+  wi.innerHTML = html;
+}
+
+// ── bind controls ──
+function bindSlider(id, valId) {
+  const el = document.getElementById(id);
+  const vl = document.getElementById(valId);
+  el.addEventListener('input', () => { vl.textContent = el.value; render(); });
+}
+bindSlider('ctrl-opacity',    'val-opacity');
+bindSlider('ctrl-value-size', 'val-value-size');
+bindSlider('ctrl-diff-size',  'val-diff-size');
+bindSlider('ctrl-row-gap',    'val-row-gap');
+document.getElementById('ctrl-divider').addEventListener('change', render);
+document.querySelectorAll('[data-row]').forEach(el => el.addEventListener('change', render));
+
+// ── export ──
+document.getElementById('export-btn').addEventListener('click', () => {
+  const o = opts();
+  const out = {
+    ...BASE,
+    widgetOpacity: o.opacity,
+    valueSize:     o.valueSize,
+    diffSize:      o.diffSize,
+    rowGap:        o.rowGap,
+    dividerShow:   o.divider,
+    rows:          o.rows,
+  };
+  const el = document.getElementById('export-output');
+  el.style.display = 'block';
+  el.textContent = JSON.stringify(out, null, 2);
+});
+
+render();
+</script>
+</body>
+</html>
