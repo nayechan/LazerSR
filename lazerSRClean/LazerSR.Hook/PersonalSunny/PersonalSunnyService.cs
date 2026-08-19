@@ -116,8 +116,10 @@ public static class PersonalSunnyService
 
             var collected = realm.Run(r =>
             {
+                // ScoreInfo.Passed is [Ignored] (not a persisted realm column) - it can't appear in a
+                // realm-side LINQ predicate. qualifies() below already re-checks it per candidate.
                 var candidates = r.All<ScoreInfo>()
-                                  .Where(s => !s.DeletePending && s.Passed)
+                                  .Where(s => !s.DeletePending)
                                   .OrderByDescending(s => s.Date)
                                   .ToList();
 
