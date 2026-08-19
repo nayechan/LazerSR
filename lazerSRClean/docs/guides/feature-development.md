@@ -258,6 +258,7 @@ public static void Postfix(ScoreInfo newScore, ref IEnumerable<StatisticItem> __
 - `CancellationToken` 인자 받고 루프 경계에서 `ThrowIfCancellationRequested()`
 - 결과 저장: 다른 패치도 값을 봐야 하면 `SunnyState`에 `volatile`/`Bindable` 필드로 publish, 아니면 `ScheduleOn` 클로저에 직접 전달 (예: MSD는 `SunnyState`를 거치지 않고 클로저로 직접 전달)
 - **osu! 라이브 클래스를 재사용할 때는 반드시 별도 인스턴스로** (`safety.md` "라이브 vs 시뮬레이션 인스턴스" 참고) — 예: `ReplayScoreTimeline`이 `new ManiaScoreProcessor()`를 만드는 방식
+- **sunny 상수를 프로세스 전역 기본값이 아니라 임시로만 바꿔 계산해야 하면** `SunnyConstants.WithIsolatedDiff(deltas, () => 계산)`를 쓴다(`architecture.md` §17). `AsyncLocal` 기반이라 다른 콜 컨텍스트의 sunny 계산에 전혀 영향을 안 준다 — 개인화diff 굽기/적용이 실제 사례다.
 
 ## 데이터 레코드 규칙
 

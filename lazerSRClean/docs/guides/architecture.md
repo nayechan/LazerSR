@@ -49,7 +49,7 @@ public class StartupHook  // global namespace 필수
 
 ## 4. 실제 존재하는 패치 (2026-07-17 기준, 코드로 직접 확인)
 
-과거 설계원칙 문서는 "정확히 2개, 전부 `Select.*`의 `LoadComplete`"라고 서술했으나 **틀렸다.** 실제로는 7개:
+과거 설계원칙 문서는 "정확히 2개, 전부 `Select.*`의 `LoadComplete`"라고 서술했으나 **틀렸다.** 실제로는 14개(2026-08-19 기준):
 
 | 파일 | 타겟 | 방식 |
 |---|---|---|
@@ -66,6 +66,7 @@ public class StartupHook  // global namespace 필수
 | `Patches/ManiaReplaySimulationPatch.cs` | `PlayerLoader.OnPlayerLoaded` (2026-07-29 추가) | 로딩 화면 — 리플레이 판정 시뮬레이션을 미리 실행. 읽기 전용 (§9) |
 | `Patches/ManiaSimulationGatePatch.cs` | `PlayerLoader.ReadyForGameplay` getter (2026-07-29 추가) | 시뮬레이션이 끝날 때까지 로딩 화면 유지 (진척 없음 10초 시 해제). 읽기 전용 (§9) |
 | `Patches/ResultsJudgementScatterPatch.cs` | `StatisticsPanel.CreateStatisticItems` (2026-07-29 추가) | 결과창 확장 통계 패널에 mania 판정 산점도 항목 삽입. 읽기 + 목록 concat (§12). 2026-08-08부터 `playableBeatmap`도 함께 넘긴다 (구간 sunnySR·구간 연습용) |
+| `Patches/PersonalSunnyScoreCollectorPatch.cs` | `Player.ImportScore` (2026-08-19 추가) | 실제 개인 스코어가 생성될 때 개인화diff 큐에 자동 적재. 읽기 전용 — `Score`의 이미 완성된 필드만 읽는다 (§17) |
 
 `Select.*`/`LoadComplete` 제약은 존재하는 패턴의 다수를 설명하지만 전부는 아니다. 새 패치를 만들 때 이 제약에 얽매이지 말고 §안전 가이드(`safety.md`)의 실제 레드라인을 따를 것.
 
@@ -610,3 +611,51 @@ osu! 기본 `BoxElement`에 상황별 자동 숨김 두 가지를 더한 위젯.
 - **모드 구분은 `GameplayState`가 캐시돼 있는지 하나로** 한다. 선곡 화면에는 없고 게임플레이(및 HUD 스킨 에디터)에는 있다.
 - 선곡 화면에서는 캐러셀 선택이 곧 `Beatmap.Value`이므로 `IBindable<WorkingBeatmap>`만으로 지금 커서가 놓인 난이도를 안다. 오디오 길이는 미리듣기 트랙이 로드된 뒤에야 읽히므로 **길이가 생기면 그때 다시 검사**한다(`TrackLoaded` 확인 후 `Track.Length`).
 - **`OverlayColourProvider`는 선곡 화면과 대기 화면에는 있지만 게임플레이 HUD에는 없다.** 두 곳에서 같이 로드되는 부품(`StepButton`)은 `[BackgroundDependencyLoader(true)]` + 폴백 색으로 없어도 죽지 않게 한다.
+
+---
+
+## 17. sunny+ 개인화 diff (2026-08-19 신규)
+
+sunny 상수 39개 중 11개(`Tuning/PersonalBox.Tuned`)를 한 사람의 실제 정확도에 맞춰 미는 것. 계산식은 안 건드리고 상수만 이동한다 — 전체 설계 근거는 `OsuScoreModel/temp/personal/handover_lazersr.md` 참고.
+
+```
+최종 상수 = 스톡 sunny + 만인diff(UniversalDiff, 고정) + 개인화diff(PersonalDiff, 런타임 가변)
+```
+
+### 격리 — `SunnyConstants.WithIsolatedDiff`
+
+`SunnyConstants`는 필드 대신 `AsyncLocal<double[]?>` 백업 프로퍼티다. 기본 읽기는 프로세스 전역 기본값(`DiffCombiner.Combine()` = 만인diff만, `Reload()`가 채움) — 지금 존재하는 모든 sunny 소비처(1.1/2.1/4.1/4.2 pill, 툴팁, 결과창 등)가 그대로 읽는 값이고 **개인화diff는 여기 절대 안 섞인다.**
+
+`SunnyConstants.WithIsolatedDiff(deltas, () => 계산)`으로 감싼 콜 컨텍스트 안에서만 `deltas`(스톡 기준 전체 39-벡터)가 대신 읽힌다. `AsyncLocal`은 `Task.Run`/`await`를 타고 흐르지만 형제 Task나 다른 스레드로는 새지 않으므로, 개인화 계산·굽기가 다른 곳의 sunny 계산과 동시에 돌아도 서로 영향이 없다 — 락도 "지금 굽는 중인지 확인"도 필요 없다. 이 메서드를 쓰는 소비처는 지금 `PersonalSunnyWidget`(현재 맵 개인화 pill)과 `StrainGraphWidget`(§18의 개인화 오버레이), 굽기 파이프라인 자체뿐이다.
+
+### 개인화 fit — `Tuning/PersonalJacobianBaker.cs` + `PersonalFitSolver.cs`
+
+맵 하나당 sunny를 23회 스윕(기준점 1 + 11개 상수 각각 ±H 중심차분, H=0.075 유닛공간, 박스는 만인 지점 중심 ±30%)해서 `SR0`(만인 지점 값) + 유닛공간 자코비안 11개를 굽는다. 이후 적합은 sunny를 다시 안 부르고 `SR(c0+d) ≈ SR0 + J·d` 선형화만으로 13×13(절편+β+개인 Δ 11개) ridge 정규방정식 하나를 푼다 — 가우스 소거, ridge=0.01 고정(오프라인 5-fold CV로 정한 값, 클라이언트는 재탐색 안 함).
+
+**α·β를 보존한다.** 파이썬 레퍼런스(`personal_fit.py`)는 프로파일 아웃하고 버리지만, 여기서는 위젯의 "정확도 96%에서 몇 성인가" 표시가 정확히 이 둘의 역산(`SR = (yTarget-α)/β`)이라 `PersonalSunnyFitStore`에 같이 저장한다.
+
+### 파이프라인 — `Hook/PersonalSunny/`
+
+```
+스코어 생성(Player.ImportScore) 또는 수동 수집(realm 백필)
+  → PersonalSunnyQueueStore (FIFO 100개, 맵+배속+HO/IN 모드시그니처+정확도)
+  → 큐에 없는 (맵,모드시그니처) 키만 굽기 → PersonalSunnyJacStore
+  → 큐 전체로 refit → PersonalDiff.Update() + PersonalSunnyFitStore.Save()
+```
+
+- **큐 키는 맵 MD5 + 정확한 배속 + HO/IN 여부다.** DT/HT/NC/DC는 배속만 같으면 캐시를 공유해도 되지만(타이밍만 스케일된 채보라 차이 없음), HO/IN은 `IApplicableAfterBeatmapConversion`으로 `HitObjects` 자체를 재작성하므로 별도 키가 필요하다.
+- **자동 수집은 `Player.ImportScore`가 유일한 진입점**이고, 훈련/구간연습/리플레이감상용 `Player` 파생 클래스들은 전부 이 메서드를 `base` 호출 없이 override하므로(safety.md 서버 격리 표) 패치가 그쪽엔 자동으로 안 걸린다 — 별도 필터 불필요.
+- **필터는 화이트리스트**다: 본인 스코어 + mania 4K + pass + 모드가 {NM,DT,HT,NC,DC,HO,IN} 안에만 있을 것. 그 외 모드(HD/FL/HR/EZ 등)가 하나라도 섞이면 그 스코어는 통째로 제외.
+- **위젯은 상태를 폴링한다.** `PersonalSunnyService`의 상태(`IsBaking`/`BakeDone`/`BakeTotal`/`Alpha`/`Beta`/`QueueCount`)는 전부 평범한 static 프로퍼티이고, `Version`이 바뀔 때만 위젯이 `Update()`에서 다시 읽는다 — `ManiaSimulationProgressDisplay`와 같은 패턴. 백그라운드 스레드에서 Drawable을 직접 건드리지 않기 위한 선택.
+
+### 위젯 — `Widgets/PersonalSunnyWidget.cs`
+
+선곡 화면 전용(`GameplayState`가 잡히면 그리지 않음 — `SkinWidgetRegistrarPatch`가 HUD/선곡 두 툴박스에 다 노출시키므로 §16과 같은 이유로 자체 판별 필요). 위쪽에 pill 2개 — 현재 스코프된 맵의 (만인+개인) sunnySR, 그리고 이 사람이 정확도 96%를 뽑는 sunny 값(맵과 무관, α·β 역산). 아래쪽은 굽는 중이면 진행률 막대, 아니면 큐개수/100 + 수집 버튼.
+
+---
+
+## 18. StrainGraphWidget 개인화 오버레이 (2026-08-19 신규)
+
+`StrainGraphWidget`이 만인 strain과 (만인+개인) strain을 각각 계산해(`WithIsolatedDiff`로 후자만 격리) 겹쳐 그린다. 매 시점 t의 두 값을 집합처럼 봐서: 교집합(`min`)은 기존 흰/회색 막대(재생 진행 밝기 표시 포함) 그대로, 만인이 더 큰 만큼(내가 남들보다 잘 치는 부분)은 파랑, 개인이 더 큰 만큼(못 치는 부분)은 빨강으로 그 위에 얹는다. 정규화는 안 한다 — 두 곡선을 같은 화면 높이에 맞추는 분모(둘 중 최댓값)만 공유하고, 모양을 서로 맞추는 리스케일은 하지 않는다.
+
+`Drawables/StrainAreaGraph.cs`에 `StrainCapCurve`를 추가해 이 겹치는 캡을 그린다 — 기존 `StrainCurve`(항상 바닥에서 시작)와 같은 quad-batch 방식이지만 `[Low, High]` 구간만 뜬 막대를 그린다. 재생 진행에 따른 밝기 분리(§ 없음, `playedMask` 트릭)는 기존 흰/회색 막대에만 적용되고 새 캡 2개는 안 받는다 — 이 오버레이는 진행률이 아니라 난이도 성향 표시라 성격이 다르다고 판단.

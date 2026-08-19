@@ -118,6 +118,12 @@ osu!는 커널 레벨 안티치트가 없고, `tosu`/`gosumemory`/`StreamCompani
 
 구간 선택·정확도·sunnySR도 같은 성격이다 — 확정된 스코어와 변환 완료 보면을 읽기만 하고, 구간 임시 보면은 메모리에만 존재한다.
 
+## sunny+ 개인화 diff (2026-08-19)
+
+`PersonalSunnyScoreCollectorPatch`(`Player.ImportScore` Postfix)는 이미 완성된 `Score`/`ScoreInfo`를 읽어 우리 저장소(`%LocalAppData%\LazerSR\personalsunny\`)에 큐잉만 한다 — 점수·리플레이·realm 어디에도 쓰지 않고, 네트워크 호출도 없다. 레드라인에 걸리는 것이 없다.
+
+굽기(`PersonalJacobianBaker`)가 sunny를 23회 돌리는 것은 **별도 인스턴스**(`SunnyManiaDifficultyCalculator`를 매번 `new`)에 `SunnyConstants.WithIsolatedDiff`로 임시 상수만 흘려보내는 것이라, `safety.md`의 "라이브 vs 시뮬레이션 인스턴스" 원칙과 같은 성격 — osu! 라이브 난이도 계산 경로에는 손대지 않는다.
+
 ## 결과창 구간 연습의 서버 격리 (2026-08-08)
 
 구간 연습은 **완전 로컬 세션**이다. 무한 트레이닝의 차단 5개(위 표)를 그대로 따르되, 진입 경로가 결과창이라 **활동 상태에서 더 강한 성질**을 갖는다.

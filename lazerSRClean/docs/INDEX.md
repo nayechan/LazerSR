@@ -13,7 +13,9 @@
 | `backup\sunny-v2-removed-2026-05-16\` | lazerSRClean 시작 시 폐기된 구 `LazerSR\` v2 시도(Dan/Graph/MSD/스킨위젯/클론) | 보존 |
 | `LazerSR\` | 기능 테스트 참고 환경 — lazerSRClean과 별개로 유지되는 실험용 프로젝트 | 보존 |
 | `osu\` | osu!lazer 소스 (ppy-osu-1164870 기준, 2026-07-17 갱신) — 컴파일타임 `ProjectReference` 대상 | **삭제금지** |
-| `sunnyosu\` | sunny 리워크 mania 계산기 원본 fork — `LazerSR.SunnyCalculator` 이식 소스 | **삭제금지** |
+| `sunnyosu\` | sunny 리워크 mania 계산기 원본 fork — 이식은 이미 끝나서 **현재 어떤 `.csproj`도 참조 안 함**(2026-08-19 grep으로 확인, `sunnyosu\`가 없어도 빌드 됨). 과거 이식 근거 자료로 보존 | 보존 |
+| `enissayosu\` | 용도 미상 — `.csproj`/`.cs`/`.iss` 어디서도 참조 안 됨(2026-08-19 확인). git에는 안 올라감(`.gitignore`) | 확인 필요 |
+| `minacalc\` | MinaCalc 원본(Rust) clone — 실제 쓰는 건 `LazerSR.Hook\MinaCalc.dll`(사전 컴파일된 바이너리)뿐, 이 소스는 빌드에 안 쓰임. git에는 안 올라감(`.gitignore`) | 보존 (미사용) |
 
 ---
 
@@ -48,12 +50,14 @@
 | `LazerSR.Hook\Widgets\` | `ISerialisableDrawable` 스킨 위젯 구현체. 키뷰어(`KeyViewerWidget`/`KeyViewerKey`)와 `BoxElementPlus`는 osu! 본체 위젯을 상속한 것 — `architecture.md` §10/§11 | 관리대상 |
 | `LazerSR.Hook\Drawables\` | 커스텀 drawable — StrainAreaGraph, MsdBarChart, ManiaJudgementLineOverlay/ManiaPressOverlay/ManiaJudgementSimulation(리플레이 판정 표시, `architecture.md` §9), ManiaJudgementScatterGraph(결과창 판정 산점도 + 구간 선택·연습, §12) | 관리대상 |
 | `LazerSR.Hook\Data\` | 불변 record 데이터 타입 + 화면 간 전달용 상태 슬롯(`ManiaSimulationState`, `ManiaOverlayVisibility` 등) | 관리대상 |
+| `LazerSR.Hook\PersonalSunny\` | 개인화 diff 파이프라인 — 큐/J캐시/적합결과 저장소, 모드 화이트리스트, `PersonalSunnyService`(굽기+적합 오케스트레이터), `Player.ImportScore` 자동 수집 패치. `architecture.md` §17 | **관리대상** (2026-08-19 신규) |
 | `LazerSR.Hook\LazerSrStorage.cs` | 개인 저장소(`%LocalAppData%\LazerSR\`) 경로/원자적 쓰기 유틸. 네임스페이스는 루트 고정(`architecture.md` §16) | 관리대상 |
 | `LazerSR.Hook\Ipc\PipeServer.cs` | Named Pipe 서버 (`sunny:on/off` + ad-hoc 브로드캐스트) | 관리대상 |
 | `LazerSR.Launcher\` | WPF 런처 EXE — osu! 실행 + Pipe 클라이언트 | **관리대상** |
 | `LazerSR.Launcher\Configuration\` | 설치 경로/설정 저장 | 관리대상 |
 | `LazerSR.SunnyCalculator\` | 독립 sunnySR 계산 파이프라인 (osu! `DifficultyCalculator` 비상속) | **관리대상** |
 | `LazerSR.SunnyCalculator\Difficulty\` | sunnyosu에서 이식된 skill/evaluator/preprocessor | 관리대상 |
+| `LazerSR.SunnyCalculator\Tuning\` | sunny 상수 39개 + 만인/개인화 diff + `WithIsolatedDiff` 격리 계층 + 개인화 fit 솔버/굽기. `architecture.md` §17 | **관리대상** (2026-08-19 확장) |
 
 ---
 
@@ -67,4 +71,4 @@ LazerSR.Hook.csproj      → ProjectReference → LazerSR.SunnyCalculator.csproj
 LazerSR.SunnyCalculator.csproj → ProjectReference(Private=false) → 위와 동일 osu 경로
 ```
 
-`osu\`, `sunnyosu\`가 없으면 `lazerSRClean` 전체가 빌드되지 않는다 — 절대 삭제 금지.
+`osu\`가 없으면 `lazerSRClean` 전체가 빌드되지 않는다 — 절대 삭제 금지. `sunnyosu\`는 위 그래프 어디에도 안 걸린다(2026-08-19 확인) — 없어도 빌드된다, 삭제해도 무방하지만 과거 이식 근거로 보존 중.
