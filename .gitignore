@@ -1,7 +1,7 @@
 # 빌드 산출물 (재생성 가능)
 **/bin/
 **/obj/
-installer/output/
+**/installer/output/
 
 # IDE / OS
 .vs/
