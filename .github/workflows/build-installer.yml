@@ -1,0 +1,83 @@
+name: Build Installer
+
+# 수동 실행(버전 직접 입력) 또는 v*.*.* 태그 푸시로 트리거된다.
+# installer\LazerSRClean.iss는 저장소에 커밋된 원본을 건드리지 않는다 — 체크아웃된 워크스페이스
+# 안의 사본만 빌드 직전에 고쳐서 쓴다(버전 문자열 + 로컬 절대경로였던 MyPublishDir/OutputDir를
+# 러너의 실제 체크아웃 경로로 치환).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "인스톨러 버전 (예: 6.4.0)"
+        required: true
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "push") {
+            $v = "${{ github.ref_name }}" -replace '^v', ''
+          } else {
+            $v = "${{ inputs.version }}"
+          }
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Publish Launcher (pulls in Hook/SunnyCalculator via ProjectReference)
+        working-directory: lazerSRClean
+        run: dotnet publish "LazerSR.Launcher\LazerSR.Launcher.csproj" -c Release
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Patch installer script for this run (workspace copy only)
+        shell: pwsh
+        run: |
+          $issPath = "lazerSRClean\installer\LazerSRClean.iss"
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "lazerSRClean\LazerSR.Launcher\bin\Release\net8.0-windows\win-x64\publish"
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE "lazerSRClean\installer\output"
+
+          $content = Get-Content $issPath -Raw
+          $content = $content -replace '#define MyAppVersion ".*?"', "#define MyAppVersion `"${{ steps.version.outputs.value }}`""
+          $content = $content -replace '#define MyPublishDir ".*?"', "#define MyPublishDir `"$publishDir`""
+          $content = $content -replace 'OutputDir=.*', "OutputDir=$outputDir"
+          Set-Content -Path $issPath -Value $content -NoNewline
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "lazerSRClean\installer\LazerSRClean.iss"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LazerSR-v${{ steps.version.outputs.value }}-Setup
+          path: lazerSRClean\installer\output\*.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $exe = (Get-Item lazerSRClean\installer\output\*.exe).FullName
+          gh release create "${{ github.ref_name }}" "$exe" --title "${{ github.ref_name }}" --generate-notes
