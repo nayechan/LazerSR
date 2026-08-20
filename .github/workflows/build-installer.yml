@@ -30,6 +30,11 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+          cache: true
+          cache-dependency-path: |
+            lazerSRClean/**/*.csproj
+            osu/osu.Game/**/*.csproj
+            osu/osu.Game.Rulesets.*/**/*.csproj
 
       - name: Resolve version
         id: version
