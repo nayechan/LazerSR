@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LazerSR.Hook.Calculators;
+using LazerSR.Hook.Data;
 using LazerSR.Hook.Drawables;
 using LazerSR.SunnyCalculator.Tuning;
 using osu.Framework.Allocation;
@@ -38,6 +39,9 @@ public class StrainGraphWidget : CompositeDrawable, ISerialisableDrawable
     [SettingSource("PP 가중치 지수")]
     public BindableNumber<float> PPWeightExponent { get; } =
         new BindableFloat(1.5f) { MinValue = 0, MaxValue = 4, Precision = 0.1f };
+
+    [SettingSource("개인화 오버레이 표시", "빨강/파랑으로 만인 대비 개인화 강도 차이를 표시합니다")]
+    public BindableBool ShowPersonalOverlay { get; } = new BindableBool(false);
 
     // gameplay context
     [Resolved(canBeNull: true)]
@@ -111,6 +115,7 @@ public class StrainGraphWidget : CompositeDrawable, ISerialisableDrawable
 
         HoneySpot2Threshold.BindValueChanged(_ => scheduleRecalculate());
         PPWeightExponent.BindValueChanged(_ => scheduleRecalculate());
+        ShowPersonalOverlay.BindValueChanged(_ => scheduleRecalculate());
 
         if (gameplayState != null)
         {
@@ -156,6 +161,7 @@ public class StrainGraphWidget : CompositeDrawable, ISerialisableDrawable
         var token = cts.Token;
         float h2Threshold = HoneySpot2Threshold.Value;
         float ppWeight    = PPWeightExponent.Value;
+        bool showPersonal = ShowPersonalOverlay.Value;
 
         // capture all game-thread values before going to background
         var gs    = gameplayState;
@@ -196,10 +202,20 @@ public class StrainGraphWidget : CompositeDrawable, ISerialisableDrawable
                 var universalData = SunnyStrainGraph.Calculate(playable, modsToUse, token);
                 token.ThrowIfCancellationRequested();
 
-                double[] personalDeltas = PersonalDiff.CombinedWithUniversal();
-                var personalData = SunnyConstants.WithIsolatedDiff(personalDeltas,
-                    () => SunnyStrainGraph.Calculate(playable, modsToUse, token));
-                token.ThrowIfCancellationRequested();
+                // 오버레이가 꺼져 있으면 개인화 재계산 자체를 건너뛴다 - universalData를 그대로 써서
+                // strongerCaps/weakerCaps 구간이 항상 비게(u == p) 만든다.
+                StrainGraphData personalData;
+                if (showPersonal)
+                {
+                    double[] personalDeltas = PersonalDiff.CombinedWithUniversal();
+                    personalData = SunnyConstants.WithIsolatedDiff(personalDeltas,
+                        () => SunnyStrainGraph.Calculate(playable, modsToUse, token));
+                    token.ThrowIfCancellationRequested();
+                }
+                else
+                {
+                    personalData = universalData;
+                }
 
                 // PP-curve honey spot 2
                 double[] honeySpots2 = [];

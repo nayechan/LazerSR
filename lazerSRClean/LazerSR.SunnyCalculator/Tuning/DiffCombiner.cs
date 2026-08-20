@@ -11,5 +11,11 @@ namespace LazerSR.SunnyCalculator.Tuning;
 /// </summary>
 public static class DiffCombiner
 {
-    public static double[] Combine() => UniversalDiff.Deltas;
+    /// <summary>
+    /// Temporary kill switch for sunny+ (the everyone-diff). Set by the Launcher's sunny+ checkbox via
+    /// an environment variable read at hook startup; true (stock behaviour) unless explicitly disabled.
+    /// </summary>
+    public static bool UniversalDiffEnabled { get; set; } = true;
+
+    public static double[] Combine() => UniversalDiffEnabled ? UniversalDiff.Deltas : new double[SunnyConstants.Count];
 }

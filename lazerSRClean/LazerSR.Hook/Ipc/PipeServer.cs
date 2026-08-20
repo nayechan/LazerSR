@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
+using LazerSR.SunnyCalculator.Tuning;
 
 namespace LazerSR.Hook.Ipc;
 
@@ -105,6 +106,10 @@ public static class PipeServer
                         SunnyState.SetEnabled(true);
                     else if (line == "sunny:off")
                         SunnyState.SetEnabled(false);
+                    else if (line == "sunnyplus:on")
+                        SetUniversalDiffEnabled(true);
+                    else if (line == "sunnyplus:off")
+                        SetUniversalDiffEnabled(false);
                 }
             }
             finally
@@ -116,5 +121,14 @@ public static class PipeServer
                 }
             }
         }
+    }
+
+    // TEMP: sunny+ on/off checkbox in the Launcher. Reload() recomputes SunnyConstants' process-wide
+    // default so every sunny calculation started after this point (song select, tooltips, results
+    // screen, ...) picks up the change - already-displayed pills only refresh once they recompute.
+    private static void SetUniversalDiffEnabled(bool enabled)
+    {
+        DiffCombiner.UniversalDiffEnabled = enabled;
+        SunnyConstants.Reload();
     }
 }
