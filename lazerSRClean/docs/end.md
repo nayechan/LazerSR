@@ -1,6 +1,33 @@
 # 작업 마무리 체크리스트
 
-## 1. 배포 (Inno Setup)
+## 1. 배포
+
+**2026-08-20부터 기본 경로는 GitHub Actions다** (`.github\workflows\build-installer.yml`, PR #2). 로컬 Inno Setup 수동 컴파일은 CI가 없을 때의 폴백으로만 남겨둔다.
+
+### 1a. 기본 경로 — 태그 push (CI가 빌드 + 릴리즈까지 전부 처리)
+
+```powershell
+git tag -a v{version} -m "v{version}"   # 예: v6.4.1
+git push origin v{version}
+```
+
+`v*.*.*` 태그 push가 워크플로를 트리거한다. 워크플로가 하는 일:
+1. `dotnet publish LazerSR.Launcher\LazerSR.Launcher.csproj -c Release`
+2. **체크아웃된 워크스페이스 사본**의 `installer\LazerSRClean.iss`에서 `MyAppVersion`/`MyPublishDir`/`OutputDir`를 태그 버전·러너 경로로 치환 — **저장소에 커밋된 `.iss` 원본은 건드리지 않는다.** 즉 태그를 올리기 전에 로컬 `.iss`의 버전을 미리 손으로 바꿔둘 필요가 없다.
+3. Inno Setup(ISCC)로 컴파일
+4. 인스톨러를 워크플로 아티팩트로 업로드
+5. **태그 push로 트리거된 경우에만** GitHub Release를 태그 이름으로 자동 생성하고 exe를 첨부
+
+진행 상황 확인:
+```powershell
+gh run list --repo shinsh628/LazerSR --workflow=build-installer.yml --limit 3
+```
+
+버전 번호만 바꿔 수동으로 다시 돌리고 싶으면(태그 없이) `workflow_dispatch`로도 실행 가능 — GitHub Actions 탭에서 "Run workflow" + 버전 입력, 또는 `gh workflow run build-installer.yml -f version=6.4.1`. 이 경로는 release를 만들지 않고 아티팩트만 나온다(위 5번 조건 참고).
+
+**주의**: `installer\LazerSRClean.iss`의 `AppId`는 절대 바꾸지 않는다 (업그레이드 인식용, 최초 LazerSR과 동일 유지). `[Files]` 목록에 새 의존 DLL을 추가했다면(`architecture.md` §8) `.iss`의 `[Files]` 섹션도 같이 갱신하고 커밋할 것 — 이건 워크플로가 대신 해주지 않는다.
+
+### 1b. 폴백 — 로컬 수동 빌드 (CI 없이 확인만 하고 싶을 때)
 
 ```powershell
 dotnet publish "LazerSR.Launcher\LazerSR.Launcher.csproj" -c Release
@@ -8,15 +35,12 @@ dotnet publish "LazerSR.Launcher\LazerSR.Launcher.csproj" -c Release
 
 출력: `LazerSR.Launcher\bin\Release\net8.0-windows\win-x64\publish\`
 
-배포할 새 버전이 있으면:
-1. `installer\LazerSRClean.iss` 2번째 줄 `MyAppVersion` 값을 올린다 (예: `4.1.0` → `4.2.0`)
+1. `installer\LazerSRClean.iss` 2번째 줄 `MyAppVersion` 값을 올린다 (예: `4.1.0` → `4.2.0`) — **이 로컬 수정은 커밋해도 되고 안 해도 된다**, 어차피 1a 경로는 이 파일의 커밋된 값을 안 쓴다.
 2. Inno Setup Compiler(ISCC)로 컴파일 — 설치 위치: `C:\Users\shins\AppData\Local\Programs\Inno Setup 6\ISCC.exe` (PATH에 없음, 매번 전체 경로로 호출):
    ```powershell
    & "C:\Users\shins\AppData\Local\Programs\Inno Setup 6\ISCC.exe" "C:\dev\lazerSR\lazerSRClean\installer\LazerSRClean.iss"
    ```
 3. 결과물: `installer\output\LazerSR-v{version}-Setup.exe`
-
-**주의**: `AppId`는 절대 바꾸지 않는다 (업그레이드 인식용, 최초 LazerSR과 동일 유지). `[Files]` 목록에 새 의존 DLL을 추가했다면(`architecture.md` §8) `.iss`의 `[Files]` 섹션도 같이 갱신.
 
 ## 2. progress 로그 작성
 
