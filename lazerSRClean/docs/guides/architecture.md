@@ -67,6 +67,7 @@ public class StartupHook  // global namespace 필수
 | `Patches/ManiaSimulationGatePatch.cs` | `PlayerLoader.ReadyForGameplay` getter (2026-07-29 추가) | 시뮬레이션이 끝날 때까지 로딩 화면 유지 (진척 없음 10초 시 해제). 읽기 전용 (§9) |
 | `Patches/ResultsJudgementScatterPatch.cs` | `StatisticsPanel.CreateStatisticItems` (2026-07-29 추가) | 결과창 확장 통계 패널에 mania 판정 산점도 항목 삽입. 읽기 + 목록 concat (§12). 2026-08-08부터 `playableBeatmap`도 함께 넘긴다 (구간 sunnySR·구간 연습용) |
 | `Patches/PersonalSunnyScoreCollectorPatch.cs` | `Player.ImportScore` (2026-08-19 추가) | 실제 개인 스코어가 생성될 때 개인화diff 큐에 자동 적재. 읽기 전용 — `Score`의 이미 완성된 필드만 읽는다 (§17) |
+| `Patches/PatternCopyMenuButtonPatch.cs` | `ButtonSystem.load` (**BDL 메서드**, 2026-08-21 추가) | 메인 메뉴 **편집** 서브메뉴에 '패턴 복제' 버튼 추가 (§19) |
 
 `Select.*`/`LoadComplete` 제약은 존재하는 패턴의 다수를 설명하지만 전부는 아니다. 새 패치를 만들 때 이 제약에 얽매이지 말고 §안전 가이드(`safety.md`)의 실제 레드라인을 따를 것.
 
@@ -86,7 +87,8 @@ public static class SunnyState
 }
 ```
 
-- Launcher→Hook 명령은 `sunny:on` / `sunny:off` **둘뿐**. 파이프 서버는 이 두 문자열만 처리하고 나머지는 무시한다 (`PipeServer.HandleConnectionAsync`).
+- Launcher→Hook 명령은 `sunny:on` / `sunny:off` / `sunnyplus:on` / `sunnyplus:off`. 파이프 서버는 이 문자열들만 처리하고 나머지는 무시한다 (`PipeServer.HandleConnectionAsync`). **2026-08-21부터 `pc:`로 시작하는 줄은 패턴 복제 모드의 실시간 노트 스트림으로 먼저 걸러진다** (§19).
+- **다중 클라이언트를 지원하지 않는 설계가 실제로 문제를 일으킨다.** newScreen이 붙으면 `_activeWriter`가 그쪽으로 넘어가 **Launcher는 그동안 브로드캐스트를 못 받는다**(sunnySR 표시 등이 갱신되지 않음). 기능에는 지장이 없어 그대로 뒀다.
 - Hook→Launcher는 단순 ad-hoc 접두사 브로드캐스트: `sunnysr:`, `bestacc:`, `replaycompare:{score}:{combo}` 등. `PipeServer.BroadcastAsync`는 **연결된 클라이언트 1개(`_activeWriter`)에게만** 쓴다 — 다중 Launcher 동시 연결은 지원 안 함.
 - **스킨 위젯(Dan/MSD/StrainGraph/ReplayCompare/SectionTimer/SunnyPP)의 개별 ON/OFF는 Launcher가 아니라 osu! 자체 스킨 에디터의 `[SettingSource]`로 이뤄진다.** Launcher의 "Features" 토글 섹션은 2026-05-19에 제거됐다 (`MainWindow.xaml`).
 - 값 전파는 커스텀 subscriber 리스트가 아니라 **osu.Framework의 `Bindable<T>` 자체 메커니즘**을 그대로 쓴다 — 각 pill이 `pill.Current = SunnyState.CurrentSr`로 바인딩하면 이후 자동 동기화.
@@ -659,3 +661,90 @@ sunny 상수 39개 중 11개(`Tuning/PersonalBox.Tuned`)를 한 사람의 실제
 `StrainGraphWidget`이 만인 strain과 (만인+개인) strain을 각각 계산해(`WithIsolatedDiff`로 후자만 격리) 겹쳐 그린다. 매 시점 t의 두 값을 집합처럼 봐서: 교집합(`min`)은 기존 흰/회색 막대(재생 진행 밝기 표시 포함) 그대로, 만인이 더 큰 만큼(내가 남들보다 잘 치는 부분)은 파랑, 개인이 더 큰 만큼(못 치는 부분)은 빨강으로 그 위에 얹는다. 정규화는 안 한다 — 두 곡선을 같은 화면 높이에 맞추는 분모(둘 중 최댓값)만 공유하고, 모양을 서로 맞추는 리스케일은 하지 않는다.
 
 `Drawables/StrainAreaGraph.cs`에 `StrainCapCurve`를 추가해 이 겹치는 캡을 그린다 — 기존 `StrainCurve`(항상 바닥에서 시작)와 같은 quad-batch 방식이지만 `[Low, High]` 구간만 뜬 막대를 그린다. 재생 진행에 따른 밝기 분리(§ 없음, `playedMask` 트릭)는 기존 흰/회색 막대에만 적용되고 새 캡 2개는 안 받는다 — 이 오버레이는 진행률이 아니라 난이도 성향 표시라 성격이 다르다고 판단.
+
+---
+
+## 19. 패턴 복제 모드 (2026-08-21 신규)
+
+대상 리듬게임 화면을 실시간으로 읽어 그 패턴을 osu!에 **그대로 재현**하는 모드. 노트를 만드는 쪽은
+osu! 밖의 별도 프로그램 **newScreen**(`C:\dev\ScreenEditor\newScreen`)이고, 여기는 그것을 받아 놓기만 한다.
+
+```
+메인 메뉴 ─(편집 서브메뉴)→ PatternCopyScreen ─(즉시)→ PatternCopyPlayerLoader → PatternCopyPlayer
+                                                                                     ↑ pc:* 명령
+newScreen (화면 캡처 → 노트 감지) ──Named Pipe──> PatternCopyBridge ──> PatternCopyInjector
+```
+
+| 파일 | 역할 |
+|---|---|
+| `Patches/PatternCopyMenuButtonPatch.cs` | 메인 메뉴 **편집** 서브메뉴에 버튼 추가 (무한 트레이닝은 플레이 서브메뉴) |
+| `Screens/PatternCopyScreen.cs` | **화면을 그리지 않는 통과 지점.** 고를 것이 없으므로 곧장 게임플레이로 넘어간다 |
+| `Screens/PatternCopyBeatmap.cs` | 6키 시드 비트맵(약 83분). 무한 트레이닝의 것과 성격이 같고 키 수만 다르다 |
+| `Screens/PatternCopyPlayer.cs` | `Player` 직접 상속. 매 `Update`에서 명령 큐를 비워 주입한다 |
+| `PatternCopy/PatternCopyBridge.cs` | 파이프(백그라운드 스레드) → 업데이트 스레드 사이의 명령 큐 |
+| `PatternCopy/PatternCopyInjector.cs` | 시각 원점 관리 + `Playfield.Add` + 열린 롱노트 추적 |
+| `PatternCopy/HoldNoteTruncator.cs` | 주입된 롱노트를 게임플레이 도중 잘라낸다 (아래 참고) |
+| `PatternCopy/PatternCopySessionState.cs` | 캡처 세션 경계 통지 (`SessionIndex`) |
+| `Input/RawKeyRelay.cs` | 비포커스 상태에서도 키 입력을 받게 한다 (아래 참고) |
+| `Widgets/PatternCopyStatusWidget.cs` | 콤보/정확도 표시. 세션이 바뀌면 리셋 |
+
+**화면이 통과 지점인 이유는 DI다.** `Beatmap`/`Ruleset`/`Mods`는 `OsuScreen`의 protected 멤버라,
+메뉴 버튼 패치에서 직접 세팅하려면 리플렉션이 필요하다. 화면을 하나 두면 전부 평범한 대입이 된다.
+
+### 프로토콜 (newScreen → Hook, 한 줄씩)
+
+```
+pc:sync:<보낸쪽 경과ms>              시간 원점. 매 틱 오지만 원점이 없을 때만 쓴다
+pc:note:<id>:<col>:<hitMs>:<durMs>   길이가 확정된 노트 (durMs=0이면 단노트)
+pc:hold:<id>:<col>:<hitMs>           끝을 아직 모르는 롱노트
+pc:cut:<id>:<durMs>                  그 롱노트의 실제 길이 확정
+pc:stop                              캡처 종료 (열린 롱노트 정리)
+```
+
+- **`pc:sync`를 매 틱 반복해서 보낸다.** 한 번만 보내면 캡처 시작과 모드 진입의 **순서에 의존**하게 되고,
+  모드에 들어오기 전에 온 `pc:sync`는 `Bridge`가 버리므로 원점이 영영 잡히지 않는다(실제로 겪은 버그).
+- 컬럼 매핑과 사이드노트 병합은 **newScreen이 전담**한다. Hook은 컬럼 번호를 그대로 받는다.
+- **파이프 클라이언트는 `PipeOptions.Asynchronous`로 열어야 한다.** 없으면 동기 핸들이 되고 Windows가
+  같은 핸들의 I/O를 직렬화해서, 수신 스레드가 `ReadFile`에서 대기하는 동안 `WriteFile`이 함께 멈춘다.
+  또한 **들어오는 줄을 읽어서 버려야 한다** — `PipeServer`는 `_activeWriter`(가장 최근 연결) 하나에게만
+  쓰는데, 게임플레이 중에는 `PlayerGameplayPatch`가 100ms마다 브로드캐스트하기 때문이다.
+  Launcher의 `PipeClient`가 원래 둘 다 하고 있었다.
+
+### 롱노트 런타임 절단 — `ApplyDefaults()`를 다시 부르면 안 된다
+
+대상 게임의 롱노트는 언제 끝날지 미리 알 수 없어서 **아주 길게(100초) 깔아두고 끝이 확정되면 자른다.**
+리드타임보다 긴 롱노트(= 절대다수)는 **이미 헤드가 판정되어 붙잡고 있는 상태에서** 잘라야 한다.
+
+`ApplyDefaults()` 재호출은 `CreateNestedHitObjects()`가 Head/Tail/Body를 **새 객체로 교체**하고
+`DrawableHitObject.onDefaultsApplied`가 전체 재적용을 유발해서, 헤드의 판정 결과와 누적된 홀드 기록이
+통째로 날아간다 — 절단이 아니라 **노트 재생성**이 되고 붙잡고 있던 홀드가 끊긴다(실기 확인).
+
+대신 세 가지만 외과적으로 고친다:
+1. `HoldNote.Duration` 대입 — setter가 **기존** `Tail.StartTime`을 갱신한다(객체 교체 없음).
+2. `Body.Duration` 대입 — `Duration` setter가 Body는 건드리지 않아 수동으로 맞춘다.
+3. `DrawableHitObject.DefaultsApplied` **강제 발화**(리플렉션) — 화면상 길이를
+   `ScrollingHitObjectContainer`가 `layoutComputed`에 캐시하므로 무효화가 필요하다.
+   **게임플레이 중 이 이벤트의 구독자는 `invalidateHitObject` 하나뿐**이라(나머지는 에디터 전용)
+   부작용 없이 레이아웃 재계산만 얻는다.
+
+### 비포커스 입력 릴레이 (`Input\`)
+
+이 모드에서는 사용자가 **대상 게임을 조작**하므로 osu!는 포커스를 못 받는다. 그러면 SDL 기본 키보드
+핸들러가 아무것도 받지 못한다. Raw Input의 `RIDEV_INPUTSINK`로 **포커스와 무관하게** 하드웨어 키를
+받아 프레임워크 입력 큐에 넣는다.
+
+- `UserInputManager`가 매 프레임 폴링하는 대상이 `Host.AvailableInputHandlers`이고, 이 프로퍼티는
+  `{ get; private set; }`이라 auto-property 백킹 필드를 통해서만 핸들러를 추가할 수 있다(§ui-patching §3 패턴).
+- **키보드 입력은 포커스로 걸러지지 않는다.** `UserInputManager`의 포커스/커서 검사는 마우스 전용이고
+  `Host.IsActive` 게이트는 없다 — 그래서 이 방식이 성립한다.
+- **osu!가 포커스를 가진 동안에는 릴레이를 멈춰야 한다.** 안 그러면 SDL 핸들러와 겹쳐 한 번 누른 키가
+  두 번 들어간다. 또 그 전환 시점에 **눌러둔 키를 전부 떼어줘야** 한다(안 그러면 영원히 눌린 키가 남는다).
+- 합성 입력(`SendInput` 등)은 쓰지 않는다 — 사용자가 실제로 누른 키를 전달만 한다.
+
+### 시도했다가 되돌린 것 — 비활성 창 프레임 제한
+
+`GameHost.MaximumInactiveHz`를 올려 비포커스 프레임 저하를 막으려 했으나 **역효과였다.**
+그 값은 "저하 기능의 스위치"가 아니라 **비활성일 때의 상한값 자체**라, 올리면 상한이 사라진다.
+VSync를 쓰면 `MaximumDrawHz`도 `int.MaxValue`(제한은 vsync가 담당)인데 **가려진 창은 vsync에
+물리지 않아**, 결국 아무것도 제한하지 않는 루프가 되어 프레임이 폭주하다 렉으로 끊기길 반복했다.
+실측상 비포커스에서도 프레임이 떨어지지 않으므로 **애초에 막을 문제가 없었다.**

@@ -102,6 +102,10 @@ public static class PipeServer
                     if (line is null)
                         break;
 
+                    // 패턴 복제 모드의 실시간 노트 스트림(newScreen이 보낸다). 양이 많아 먼저 걸러낸다.
+                    if (PatternCopy.PatternCopyBridge.TryHandleLine(line))
+                        continue;
+
                     if (line == "sunny:on")
                         SunnyState.SetEnabled(true);
                     else if (line == "sunny:off")
