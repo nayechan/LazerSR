@@ -36,6 +36,11 @@ public static class PersonalSunnyService
     public static double Beta { get; private set; }
     public static int FitRecordCount { get; private set; }
 
+    /// <summary>How many of <see cref="FitRecordCount"/> came from Pool A ("all-time") vs Pool B ("recent") - widget breakdown display.</summary>
+    public static int TopPoolRecordCount { get; private set; }
+
+    public static int RecentPoolRecordCount { get; private set; }
+
     /// <summary>Bumped whenever any of the state above changes - the widget compares this each frame instead of subscribing to an event.</summary>
     public static int Version { get; private set; }
 
@@ -163,6 +168,16 @@ public static class PersonalSunnyService
     /// which already have it in hand from resolving the chart's SR beforehand.
     /// </summary>
     private static bool passesRecentPoolFloor(double sr, double accuracy) => accuracy >= recent_pool_accuracy_floor;
+
+    /// <summary>
+    /// Pool B contributes only its best <see cref="recent_pool_effective_count"/> (by Performance) out of
+    /// <see cref="PersonalSunnyQueueStore.MaxEntries"/> most-recent plays to the fit - mirrors Arcaea's
+    /// potential system, where Recent10 is the 10 highest Play Ratings out of the 30 most recent plays
+    /// (same ~1:2 ratio here as Arcaea's ~1:3), each chart counted once by its best occurrence in that
+    /// window. <see cref="PersonalSunnyQueueStore"/> itself is untouched - still the full 100-entry FIFO
+    /// window; this reduction only happens where <see cref="combinedEntries"/> builds the fit input.
+    /// </summary>
+    private const int recent_pool_effective_count = 50;
 
     private static bool qualifies(ScoreInfo scoreInfo, int? localUserOnlineId)
     {
@@ -386,21 +401,38 @@ public static class PersonalSunnyService
     }
 
     /// <summary>
-    /// Pool A (top-Performance ceiling) union Pool B (recent), concatenated - NOT deduped. A chart that lands in
-    /// both pools deliberately counts twice in the fit (same precedent as Arcaea's b30+r10: overlap
-    /// between "best" and "recent" isn't collapsed there either). The pools' own stores are untouched
-    /// here - eviction/FIFO semantics belong to them alone (<see cref="PersonalSunnyTopPoolStore"/>/
-    /// <see cref="PersonalSunnyQueueStore"/>).
+    /// Pool A (top-Performance ceiling) union Pool B's <see cref="recent_pool_effective_count"/>-best
+    /// reduction, concatenated - NOT deduped against each other. A chart that lands in both pools
+    /// deliberately counts twice in the fit (same precedent as Arcaea's b30+r10: overlap between "best"
+    /// and "recent" isn't collapsed there either). The pools' own stores are untouched here - eviction/FIFO
+    /// semantics belong to them alone (<see cref="PersonalSunnyTopPoolStore"/>/<see cref="PersonalSunnyQueueStore"/>).
+    /// <c>IsRecentPool</c> tags which side each entry came from, for the widget's count breakdown.
     /// </summary>
-    private static List<(PersonalSunnyJacKey Key, double Accuracy, DateTimeOffset EndedAt)> combinedEntries()
+    private static List<(PersonalSunnyJacKey Key, double Accuracy, DateTimeOffset EndedAt, bool IsRecentPool)> combinedEntries()
     {
-        var combined = new List<(PersonalSunnyJacKey Key, double Accuracy, DateTimeOffset EndedAt)>();
+        var combined = new List<(PersonalSunnyJacKey Key, double Accuracy, DateTimeOffset EndedAt, bool IsRecentPool)>();
 
         foreach (var entry in PersonalSunnyTopPoolStore.Entries)
-            combined.Add((entry.Key, entry.Accuracy, entry.EndedAt));
+            combined.Add((entry.Key, entry.Accuracy, entry.EndedAt, false));
 
-        foreach (var entry in PersonalSunnyQueueStore.Entries)
-            combined.Add((PersonalSunnyJacKey.From(entry), entry.Accuracy, entry.EndedAt));
+        // Recent pool -> best recent_pool_effective_count by Performance, one occurrence per chart (the
+        // best one) within the MaxEntries-most-recent window - mirrors Arcaea's Recent10 (see
+        // recent_pool_effective_count's doc). PersonalSunnyQueueStore.Entries is already that raw window.
+        var recentBest = PersonalSunnyQueueStore.Entries
+                                                  .GroupBy(PersonalSunnyJacKey.From)
+                                                  .Select(g => g.OrderByDescending(e => e.Accuracy).First())
+                                                  .Select(e =>
+                                                  {
+                                                      var key = PersonalSunnyJacKey.From(e);
+                                                      PersonalSunnyChartSrStore.TryGet(key, out double sr);
+                                                      double performance = PersonalSunnyTopPoolEntry.ComputePerformance(sr, e.Accuracy);
+                                                      return (Key: key, Entry: e, Performance: performance);
+                                                  })
+                                                  .OrderByDescending(x => x.Performance)
+                                                  .Take(recent_pool_effective_count);
+
+        foreach (var (key, entry, _) in recentBest)
+            combined.Add((key, entry.Accuracy, entry.EndedAt, true));
 
         return combined;
     }
@@ -478,8 +510,9 @@ public static class PersonalSunnyService
         var y = new List<double>();
         var sr0 = new List<double>();
         var jac = new List<double[]>();
+        int topCount = 0, recentCount = 0;
 
-        foreach (var (key, accuracy, _) in combined)
+        foreach (var (key, accuracy, _, isRecentPool) in combined)
         {
             if (!PersonalSunnyJacStore.TryGet(key, out var baked))
                 continue;
@@ -488,6 +521,11 @@ public static class PersonalSunnyService
             y.Add(-Math.Log(1.0 - clampedAccuracy));
             sr0.Add(baked.Sr0);
             jac.Add(baked.Jacobian);
+
+            if (isRecentPool)
+                recentCount++;
+            else
+                topCount++;
         }
 
         var fit = PersonalFitSolver.Solve(y.ToArray(), sr0.ToArray(), jac.ToArray());
@@ -497,6 +535,8 @@ public static class PersonalSunnyService
         Alpha = fit.Alpha;
         Beta = fit.Beta;
         FitRecordCount = y.Count;
+        TopPoolRecordCount = topCount;
+        RecentPoolRecordCount = recentCount;
 
         PersonalSunnyFitStore.Save(new PersonalSunnyFitStore.FitResult(fit.UnitStep, fit.Alpha, fit.Beta, y.Count, DateTimeOffset.Now));
     }

@@ -23,7 +23,7 @@ namespace LazerSR.Hook.PersonalSunny;
 /// same chart left only the 92.3% one in the pool, which is exactly backwards for a "skill ceiling" pool.
 /// </para>
 /// <para>
-/// This is the "top 300" side of the two-pool design; <see cref="PersonalSunnyQueueStore"/> (recency FIFO)
+/// This is the "top <see cref="Capacity"/>" side of the two-pool design; <see cref="PersonalSunnyQueueStore"/> (recency FIFO)
 /// is the "recent 100" side. Complementary, not a replacement - see the 2026-08-20 design discussion for
 /// why both are needed (SR alone gives too narrow a spread for the ridge fit).
 /// </para>
@@ -31,7 +31,7 @@ namespace LazerSR.Hook.PersonalSunny;
 /// </summary>
 public static class PersonalSunnyTopPoolStore
 {
-    public const int Capacity = 300;
+    public const int Capacity = 200;
 
     private const int schema_version = 1;
     private const string folder_name = "personalsunny";

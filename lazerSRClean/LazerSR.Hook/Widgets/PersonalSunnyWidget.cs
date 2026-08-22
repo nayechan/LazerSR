@@ -376,10 +376,11 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
         }
         else
         {
-            // Pool A(상위300)∪Pool B(최근100)를 dedup한 뒤 실제 ridge fit에 들어간 개수 - 두 풀을
-            // 따로 보여주면 유저가 겹침을 직접 빼가며 계산해야 해서, 합산된 이 값 하나만 보여준다.
-            // 버튼("리플레이 수집") 폭 때문에 라벨 공간이 좁아 짧게 유지.
-            queueLabel.Text = $"데이터 {PersonalSunnyService.FitRecordCount}개";
+            // 풀별로 실제 fit에 들어간 개수를 따로 보여준다(2026-08-22) - Pool A("전체 기간")와
+            // Pool B("최근", Arcaea r10식 최근 100개 중 상위 50개 축소)는 성격이 달라서 합산 하나보다
+            // 이렇게 나눠 보여주는 쪽이 지금 뭘 보고 있는지 더 명확하다.
+            queueLabel.Text = $"데이터 총 {PersonalSunnyService.FitRecordCount}개 " +
+                               $"(전체 기간 {PersonalSunnyService.TopPoolRecordCount}개 / 최근 {PersonalSunnyService.RecentPoolRecordCount}개)";
         }
     }
 

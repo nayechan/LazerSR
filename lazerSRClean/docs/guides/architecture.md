@@ -644,19 +644,22 @@ sunny 상수 39개 중 11개(`Tuning/PersonalBox.Tuned`)를 한 사람의 실제
 v1(2026-08-19)은 최근 100개 FIFO 하나뿐이었다. 문제: 정확도로 표본을 뽑는 게 아니라 순수 최근성이라 실력 천장 근처 데이터가 잘 안 모이고, SR 스프레드도 좁았다. v2는 풀을 두 개로 나눈다.
 
 ```
-Pool A — 상위 300 ("실력 천장", Performance 기준, PersonalSunnyTopPoolEntry.Performance)
+Pool A — 상위 200 ("실력 천장", Performance 기준, PersonalSunnyTopPoolEntry.Performance)
   ordered map: Dictionary<ChartKey,Entry>(존재조회) + SortedSet<(Performance,ChartKey)>(정렬·min-eviction)
-  PersonalSunnyTopPoolStore, capacity 300, 재도전 시 Performance가 기존보다 높을 때만 in-place 갱신(2026-08-22 수정 - 원래 무조건 덮어써서 더 나쁜 재도전이 개인 최고 기록을 지워버리는 버그가 있었음, 실측으로 확인)
+  PersonalSunnyTopPoolStore, capacity 200(2026-08-22, 300에서 축소), 재도전 시 Performance가 기존보다 높을 때만 in-place 갱신(2026-08-22 수정 - 원래 무조건 덮어써서 더 나쁜 재도전이 개인 최고 기록을 지워버리는 버그가 있었음, 실측으로 확인)
 
-Pool B — 최근 100 (평소 실력, 정확도 85% 고정 하한)
-  PersonalSunnyQueueStore, FIFO, dedup 없음
+Pool B — 최근 100 중 상위 50 (평소 실력, 정확도 85% 고정 하한)
+  PersonalSunnyQueueStore, FIFO 100개, dedup 없음 - 저장 자체는 그대로
+  fit 투입 시점(combinedEntries)에서만 채보당 최고 정확도 1개로 dedup 후 Performance 상위 50개로 축소(2026-08-22)
 ```
 
 Pool A는 원래 순수 SR로 뽑았으나(2026-08-20 설계), 실기 대조 결과 선형모델이 저SR 천장효과를 못 담아내는 게 드러나 2026-08-21에 `Performance`(osu! `ManiaPerformanceCalculator`의 SR^2.2×정확도 배율 곡선을 그대로 차용, 80% 미만 정확도는 자동 0) 기준으로 전면 교체됐다 — 정렬만 바뀌었을 뿐 "정확도로 표본을 거르지 않는다"는 원래 취지(선택편향 회피)는 유지된다. 반면 SR만으로는 천장 근처에 몰려 스프레드가 좁아 ridge fit의 β 추정이 불안정해지므로, Pool B가 낮은/중간 SR의 "평소" 정확도를 보충한다.
 
 **"실력 천장" 풀인데 최고 기록이 안 남는 버그가 두 겹으로 있었다(2026-08-22, 실측으로 확인).** `Offer()` 자체가 이미 풀에 있는 채보를 무조건 최신 기록으로 덮어썼고, 전체 재수집 경로(`runBroadPhase`의 `perChart`)도 채보당 "가장 최근 플레이"를 대표로 뽑아 `Offer()`에 넘겨 애초에 최고 기록이 도달을 못 했다. 두 층 다 고쳐서 해소 — `Offer()`의 실시간 단일 반영 경로(`Player.ImportScore` → `offerToTopPool`)는 이 dedup을 안 거치므로 처음부터 정상이었다.
 
-**Pool B의 진입 문턱(`passesRecentPoolFloor`)은 정확도 85% 고정이지 Performance 상대값이 아니다.** 한때 "Pool A 최댓값 × 0.7"(Performance 상대값)로 시도했으나, 이 방식은 SR이 낮은 채보가 문턱을 넘으려면 정확도를 거의 만점급으로 밀어올려야 해서 Pool B의 저SR 구간이 "저SR+고정확도"로만 쏠리고, 그 결과 ridge fit의 β(SR-정확도 공분산 기울기)가 과도하게 가팔라져 목표 SR이 실측보다 낮게 나오는 문제가 있었다(2026-08-21 재검토). 고정 85% 컷은 SR과 무관하게 "성실한 시도"만 거르므로 이 왜곡이 없다 — 85%는 2026-08-21 이상치 분석(진짜 이상치 0.1347, 다음 정상값 0.4238, 정상 꼬리는 0.60부터)에서 가져온 값. 최종 fit 입력은 `combinedEntries()`(A∪B, dedup 없이 그냥 이어붙임 — Arcaea b30+r10 선례처럼 겹침 허용, 2026-08-20 피드백 반영)다 — 두 풀 자체(eviction/FIFO)는 안 건드린다.
+**Pool B의 진입 문턱(`passesRecentPoolFloor`)은 정확도 85% 고정이지 Performance 상대값이 아니다.** 한때 "Pool A 최댓값 × 0.7"(Performance 상대값)로 시도했으나, 이 방식은 SR이 낮은 채보가 문턱을 넘으려면 정확도를 거의 만점급으로 밀어올려야 해서 Pool B의 저SR 구간이 "저SR+고정확도"로만 쏠리고, 그 결과 ridge fit의 β(SR-정확도 공분산 기울기)가 과도하게 가팔라져 목표 SR이 실측보다 낮게 나오는 문제가 있었다(2026-08-21 재검토). 고정 85% 컷은 SR과 무관하게 "성실한 시도"만 거르므로 이 왜곡이 없다 — 85%는 2026-08-21 이상치 분석(진짜 이상치 0.1347, 다음 정상값 0.4238, 정상 꼬리는 0.60부터)에서 가져온 값.
+
+**Pool B는 Arcaea 포텐셜(b30+r10) 방식을 따라 저장 풀 전체가 아니라 그 중 상위 일부만 fit에 넣는다(2026-08-22).** Arcaea의 Recent10은 "최근 30판 중 Play Rating 상위 10개, 채보당 최고 1개만"으로 계산된다 — `PersonalSunnyQueueStore`(최근 100개 FIFO)를 그대로 두고, `combinedEntries()`가 fit 입력을 만들 때만 채보 키로 그룹핑해 최고 정확도 1개씩 남긴 뒤 `Performance` 상위 `recent_pool_effective_count`(50, 비율은 Arcaea의 1:3 대신 1:2)개만 뽑는다. `PersonalSunnyQueueStore` 자체(저장/FIFO/85% 문턱)는 안 건드린다 — 이 축소는 오직 fit 투입 단계에만 적용. 최종 fit 입력은 `combinedEntries()`(Pool A ∪ Pool B의 이 축소분, dedup 없이 그냥 이어붙임 — Arcaea b30+r10 선례처럼 겹침 허용, 2026-08-20 피드백 반영)다.
 
 #### 계산 깔때기 (broad → narrow)
 
@@ -688,7 +691,7 @@ osu! 자신의 `BeatmapUpdater`(임포트 시 스레드풀로 별점을 미리 �
 
 ### 위젯 — `Widgets/PersonalSunnyWidget.cs`
 
-선곡 화면 전용(`GameplayState`가 잡히면 그리지 않음 — `SkinWidgetRegistrarPatch`가 HUD/선곡 두 툴박스에 다 노출시키므로 §16과 같은 이유로 자체 판별 필요). 위쪽에 pill 2개 — 현재 스코프된 맵의 (만인+개인) sunnySR, 그리고 이 사람이 정확도 95%를 뽑는 sunny 값(맵과 무관, α·β 역산). 아래쪽은 굽는 중이면 진행률 막대, 아니면 **`FitRecordCount`(Pool A∪B를 dedup한 뒤 실제 fit에 들어간 개수 — 두 풀을 따로 보여주면 겹침을 유저가 직접 계산해야 해서 합산값 하나만 노출) + 수집 버튼**.
+선곡 화면 전용(`GameplayState`가 잡히면 그리지 않음 — `SkinWidgetRegistrarPatch`가 HUD/선곡 두 툴박스에 다 노출시키므로 §16과 같은 이유로 자체 판별 필요). 위쪽에 pill 2개 — 현재 스코프된 맵의 (만인+개인) sunnySR, 그리고 이 사람이 정확도 95%를 뽑는 sunny 값(맵과 무관, α·β 역산). 아래쪽은 굽는 중이면 진행률 막대, 아니면 **`"데이터 총 {FitRecordCount}개 (전체 기간 {TopPoolRecordCount}개 / 최근 {RecentPoolRecordCount}개)"` + 수집 버튼**(2026-08-22, 풀별 개수를 따로 노출 — 이전엔 합산값 하나만 보여줬음).
 
 ---
 
