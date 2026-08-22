@@ -37,11 +37,20 @@ public static class PersonalSunnyJacStore
 
     public static bool TryGet(PersonalSunnyJacKey key, out PersonalSunnyJacEntry entry) => cache.TryGetValue(key, out entry!);
 
-    public static void Put(PersonalSunnyJacEntry entry)
+    /// <param name="save">
+    /// <see langword="false"/> lets a bulk caller (narrow-phase's <c>Parallel.ForEach</c>) skip the
+    /// per-item full-cache rewrite and call <see cref="Flush"/> once after the batch instead - see
+    /// <see cref="PersonalSunnyChartSrStore.Put"/>'s doc for why this matters at scale (2026-08-22 fix).
+    /// </param>
+    public static void Put(PersonalSunnyJacEntry entry, bool save = true)
     {
         cache[entry.Key] = entry;
-        save();
+        if (save)
+            PersonalSunnyJacStore.save();
     }
+
+    /// <summary>Persists the cache immediately - pair with <see cref="Put"/>'s <c>save: false</c> after a batch of puts.</summary>
+    public static void Flush() => save();
 
     /// <summary>Drops cached entries no queued item references any more.</summary>
     public static void PruneTo(IEnumerable<PersonalSunnyJacKey> keysStillInUse)

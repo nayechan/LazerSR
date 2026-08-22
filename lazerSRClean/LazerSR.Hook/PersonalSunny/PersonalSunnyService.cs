@@ -306,27 +306,35 @@ public static class PersonalSunnyService
 
         // BeatmapManager.QueryBeatmap/GetWorkingBeatmap both go through Realm.Run/WorkingBeatmapCache's own
         // lock internally, so they're safe to call concurrently from here (verified against osu! source).
+        //
+        // save: false on both cache writes below - saving on every one of potentially thousands of
+        // survivors would be an O(n) full-cache rewrite done n times, serialised through each store's own
+        // lock across every parallel worker. Flush() once after the loop instead (2026-08-22 fix).
         Parallel.ForEach(survivors, new ParallelOptions { MaxDegreeOfParallelism = currentParallelism() }, candidate =>
         {
             try
             {
-                double sr = resolveUniversalSr(candidate.Key);
+                double sr = resolveUniversalSr(candidate.Key, save: false);
                 if (double.IsNaN(sr))
                     return;
 
                 PersonalSunnyTopPoolStore.Offer(new PersonalSunnyTopPoolEntry(
                     candidate.Key.BeatmapMd5, candidate.Key.Rate, candidate.Key.ChartMod, sr,
-                    candidate.Entry.Accuracy, candidate.Entry.EndedAt));
+                    candidate.Entry.Accuracy, candidate.Entry.EndedAt), save: false);
             }
             catch (Exception e)
             {
                 HookLog.Write($"[LazerSR] PersonalSunnyService broad-phase failed for {candidate.Key}: {e}");
             }
         });
+
+        PersonalSunnyChartSrStore.Flush();
+        PersonalSunnyTopPoolStore.Flush();
     }
 
     /// <summary>Universal-point sunny SR for one chart, via <see cref="PersonalSunnyChartSrStore"/> so it's computed at most once, ever.</summary>
-    private static double resolveUniversalSr(PersonalSunnyJacKey key)
+    /// <param name="save">Forwarded to <see cref="PersonalSunnyChartSrStore.Put"/> - see its doc for why a bulk caller passes <see langword="false"/>.</param>
+    private static double resolveUniversalSr(PersonalSunnyJacKey key, bool save = true)
     {
         if (PersonalSunnyChartSrStore.TryGet(key, out double cached))
             return cached;
@@ -340,7 +348,7 @@ public static class PersonalSunnyService
         var playable = working.GetPlayableBeatmap(maniaRuleset!, mods, CancellationToken.None);
 
         double sr = PersonalJacobianBaker.CalculateUniversalSr(playable, mods);
-        PersonalSunnyChartSrStore.Put(key, sr);
+        PersonalSunnyChartSrStore.Put(key, sr, save);
         return sr;
     }
 
@@ -419,6 +427,9 @@ public static class PersonalSunnyService
         // Independent per-chart work (own beatmap conversion, own PersonalJacobianBaker.Bake call) -
         // safe to run in parallel the same way runBroadPhase does. BakeDone/Version updates are the only
         // shared mutable state touched directly here, so those alone need the lock.
+        //
+        // save: false in bakeOne, Flush() once here after the loop - same O(n^2)-rewrite concern as
+        // runBroadPhase's cache writes (2026-08-22 fix).
         Parallel.ForEach(missing, new ParallelOptions { MaxDegreeOfParallelism = currentParallelism() }, key =>
         {
             bakeOne(key);
@@ -429,6 +440,8 @@ public static class PersonalSunnyService
                 Version++;
             }
         });
+
+        PersonalSunnyJacStore.Flush();
     }
 
     private static void bakeOne(PersonalSunnyJacKey key)
@@ -445,7 +458,7 @@ public static class PersonalSunnyService
 
             var result = PersonalJacobianBaker.Bake(playable, mods);
 
-            PersonalSunnyJacStore.Put(new PersonalSunnyJacEntry(key.BeatmapMd5, key.Rate, key.ChartMod, result.Sr0, result.Jacobian));
+            PersonalSunnyJacStore.Put(new PersonalSunnyJacEntry(key.BeatmapMd5, key.Rate, key.ChartMod, result.Sr0, result.Jacobian), save: false);
         }
         catch (Exception e)
         {

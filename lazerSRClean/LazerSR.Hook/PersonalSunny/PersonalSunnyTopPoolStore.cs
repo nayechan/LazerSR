@@ -82,7 +82,12 @@ public static class PersonalSunnyTopPoolStore
     /// Performance beats the current minimum (inserted, evicting the minimum if the pool was full); or
     /// neither (rejected, pool unchanged). Returns true if the pool actually changed.
     /// </summary>
-    public static bool Offer(PersonalSunnyTopPoolEntry entry)
+    /// <param name="save">
+    /// <see langword="false"/> lets a bulk caller (broad-phase's <c>Parallel.ForEach</c>) skip the
+    /// per-item full-pool rewrite and call <see cref="Flush"/> once after the batch instead - see
+    /// <see cref="PersonalSunnyChartSrStore.Put"/>'s doc for why this matters at scale (2026-08-22 fix).
+    /// </param>
+    public static bool Offer(PersonalSunnyTopPoolEntry entry, bool save = true)
     {
         lock (mutation_lock)
         {
@@ -96,7 +101,8 @@ public static class PersonalSunnyTopPoolStore
                 ordered.Remove((existing.Performance, key));
                 byKey[key] = entry;
                 ordered.Add((entry.Performance, key));
-                save();
+                if (save)
+                    PersonalSunnyTopPoolStore.save();
                 return true;
             }
 
@@ -104,7 +110,8 @@ public static class PersonalSunnyTopPoolStore
             {
                 byKey[key] = entry;
                 ordered.Add((entry.Performance, key));
-                save();
+                if (save)
+                    PersonalSunnyTopPoolStore.save();
                 return true;
             }
 
@@ -118,9 +125,17 @@ public static class PersonalSunnyTopPoolStore
 
             byKey[key] = entry;
             ordered.Add((entry.Performance, key));
-            save();
+            if (save)
+                PersonalSunnyTopPoolStore.save();
             return true;
         }
+    }
+
+    /// <summary>Persists the pool immediately - pair with <see cref="Offer"/>'s <c>save: false</c> after a batch of offers.</summary>
+    public static void Flush()
+    {
+        lock (mutation_lock)
+            save();
     }
 
     private static string currentDiffVersion() => string.Join(",", UniversalDiff.Deltas.Select(d => d.ToString("R")));

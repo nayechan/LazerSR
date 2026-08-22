@@ -43,11 +43,21 @@ public static class PersonalSunnyChartSrStore
 
     public static bool TryGet(PersonalSunnyJacKey key, out double sr) => cache.TryGetValue(key, out sr);
 
-    public static void Put(PersonalSunnyJacKey key, double sr)
+    /// <param name="save">
+    /// <see langword="false"/> lets a bulk caller (broad-phase's <c>Parallel.ForEach</c>) skip the
+    /// per-item full-cache rewrite and call <see cref="Flush"/> once after the batch instead - saving on
+    /// every item is an O(n) rewrite done n times (O(n^2) total, plus lock contention across threads) once
+    /// the cache holds thousands of entries (2026-08-22 fix).
+    /// </param>
+    public static void Put(PersonalSunnyJacKey key, double sr, bool save = true)
     {
         cache[key] = sr;
-        save();
+        if (save)
+            PersonalSunnyChartSrStore.save();
     }
+
+    /// <summary>Persists the cache immediately - pair with <see cref="Put"/>'s <c>save: false</c> after a batch of puts.</summary>
+    public static void Flush() => save();
 
     /// <summary>Drops cached entries no longer relevant - mirrors <see cref="PersonalSunnyJacStore.PruneTo"/>.</summary>
     public static void PruneTo(IEnumerable<PersonalSunnyJacKey> keysStillInUse)
