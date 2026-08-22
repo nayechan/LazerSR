@@ -10,20 +10,26 @@ using LazerSR.SunnyCalculator.Tuning;
 namespace LazerSR.Hook.PersonalSunny;
 
 /// <summary>
-/// Baked Jacobians, keyed by <see cref="PersonalSunnyJacKey"/>. <c>%LocalAppData%\LazerSR\personalsunny\jac_cache.json</c>.
-/// Separate file from the queue on purpose - a corrupt cache shouldn't take the queue down with it, and
-/// it can always be rebaked; the queue can't be reconstructed once scores scroll out of local history.
-/// Pruned to only the keys the current queue still references, so it never grows past what's in use.
+/// Cheap broad-phase cache: one universal-point sunny SR per chart (<see cref="PersonalJacobianBaker.CalculateUniversalSr"/>),
+/// keyed the same way as <see cref="PersonalSunnyJacStore"/> but far lighter - a single double, not an
+/// 11-dim Jacobian. This is what a broad-phase ranking pass reads/writes so a chart's SR is computed at
+/// most once, ever, regardless of how many times it gets re-ranked across sessions.
+/// <c>%LocalAppData%\LazerSR\personalsunny\chart_sr_cache.json</c>.
 /// <para>
-/// Thread-safe: narrow-phase baking runs candidates in parallel, so <see cref="TryGet"/>/<see cref="Put"/>
+/// Separate file from <see cref="PersonalSunnyJacStore"/> on purpose - most candidates a broad-phase pass
+/// looks at never make the top-300/recent-100 cut and so never need a full Jacobian bake; this cache only
+/// ever holds the cheap value, for all of them, not just the survivors.
+/// </para>
+/// <para>
+/// Thread-safe: broad-phase ranking runs candidates in parallel, so <see cref="TryGet"/>/<see cref="Put"/>
 /// can be called concurrently from multiple threads.
 /// </para>
 /// </summary>
-public static class PersonalSunnyJacStore
+public static class PersonalSunnyChartSrStore
 {
     private const int schema_version = 1;
     private const string folder_name = "personalsunny";
-    private const string file_name = "jac_cache.json";
+    private const string file_name = "chart_sr_cache.json";
 
     private static readonly JsonSerializerOptions json_options = new JsonSerializerOptions
     {
@@ -33,17 +39,17 @@ public static class PersonalSunnyJacStore
 
     private static readonly object save_lock = new();
 
-    private static readonly ConcurrentDictionary<PersonalSunnyJacKey, PersonalSunnyJacEntry> cache = load();
+    private static readonly ConcurrentDictionary<PersonalSunnyJacKey, double> cache = load();
 
-    public static bool TryGet(PersonalSunnyJacKey key, out PersonalSunnyJacEntry entry) => cache.TryGetValue(key, out entry!);
+    public static bool TryGet(PersonalSunnyJacKey key, out double sr) => cache.TryGetValue(key, out sr);
 
-    public static void Put(PersonalSunnyJacEntry entry)
+    public static void Put(PersonalSunnyJacKey key, double sr)
     {
-        cache[entry.Key] = entry;
+        cache[key] = sr;
         save();
     }
 
-    /// <summary>Drops cached entries no queued item references any more.</summary>
+    /// <summary>Drops cached entries no longer relevant - mirrors <see cref="PersonalSunnyJacStore.PruneTo"/>.</summary>
     public static void PruneTo(IEnumerable<PersonalSunnyJacKey> keysStillInUse)
     {
         var keep = new HashSet<PersonalSunnyJacKey>(keysStillInUse);
@@ -60,7 +66,9 @@ public static class PersonalSunnyJacStore
 
     /// <summary>
     /// Stable stringified snapshot of <see cref="UniversalDiff.Deltas"/> - a mismatch on load means the
-    /// universal diff has been retuned since this cache was written, so every baked Sr0/Jacobian is stale.
+    /// universal diff has been retuned since this cache was written, so every cached SR is stale (sunny's
+    /// output for the same chart would now differ). No hashing - direct string comparison, so there's no
+    /// stability-across-runs question to worry about.
     /// </summary>
     private static string currentDiffVersion() => string.Join(",", UniversalDiff.Deltas.Select(d => d.ToString("R")));
 
@@ -70,9 +78,9 @@ public static class PersonalSunnyJacStore
         return string.IsNullOrEmpty(folder) ? string.Empty : Path.Combine(folder, file_name);
     }
 
-    private static ConcurrentDictionary<PersonalSunnyJacKey, PersonalSunnyJacEntry> load()
+    private static ConcurrentDictionary<PersonalSunnyJacKey, double> load()
     {
-        var result = new ConcurrentDictionary<PersonalSunnyJacKey, PersonalSunnyJacEntry>();
+        var result = new ConcurrentDictionary<PersonalSunnyJacKey, double>();
 
         string path = filePath();
         if (string.IsNullOrEmpty(path))
@@ -84,24 +92,23 @@ public static class PersonalSunnyJacStore
 
         try
         {
-            var file = JsonSerializer.Deserialize<JacFile>(text, json_options);
+            var file = JsonSerializer.Deserialize<SrFile>(text, json_options);
 
             if (file == null || file.Version != schema_version || file.DiffVersion != currentDiffVersion() || file.Entries == null)
                 return result;
 
-            // A bad entry (wrong jacobian length, say) is dropped, not fatal to the rest.
             foreach (var entry in file.Entries)
             {
-                if (!string.IsNullOrEmpty(entry.BeatmapMd5) && entry.Jacobian is { Length: > 0 })
-                    result[entry.Key] = entry;
+                if (!string.IsNullOrEmpty(entry.BeatmapMd5))
+                    result[entry.Key] = entry.Sr;
             }
 
             return result;
         }
         catch (Exception e)
         {
-            HookLog.Write($"[LazerSR] PersonalSunnyJacStore load failed: {e}");
-            return new ConcurrentDictionary<PersonalSunnyJacKey, PersonalSunnyJacEntry>();
+            HookLog.Write($"[LazerSR] PersonalSunnyChartSrStore load failed: {e}");
+            return new ConcurrentDictionary<PersonalSunnyJacKey, double>();
         }
     }
 
@@ -115,23 +122,24 @@ public static class PersonalSunnyJacStore
 
             try
             {
-                string text = JsonSerializer.Serialize(new JacFile(schema_version, currentDiffVersion(), cache.Values.ToList()), json_options);
+                var entries = cache.Select(kv => new PersonalSunnyChartSrEntry(kv.Key.BeatmapMd5, kv.Key.Rate, kv.Key.ChartMod, kv.Value)).ToList();
+                string text = JsonSerializer.Serialize(new SrFile(schema_version, currentDiffVersion(), entries), json_options);
                 LazerSrStorage.WriteText(path, text);
             }
             catch (Exception e)
             {
-                HookLog.Write($"[LazerSR] PersonalSunnyJacStore save failed: {e}");
+                HookLog.Write($"[LazerSR] PersonalSunnyChartSrStore save failed: {e}");
             }
         }
     }
 
-    private class JacFile
+    private class SrFile
     {
-        public JacFile()
+        public SrFile()
         {
         }
 
-        public JacFile(int version, string diffVersion, List<PersonalSunnyJacEntry>? entries)
+        public SrFile(int version, string diffVersion, List<PersonalSunnyChartSrEntry>? entries)
         {
             Version = version;
             DiffVersion = diffVersion;
@@ -145,6 +153,6 @@ public static class PersonalSunnyJacStore
         public string? DiffVersion { get; set; }
 
         [JsonPropertyName("entries")]
-        public List<PersonalSunnyJacEntry>? Entries { get; set; }
+        public List<PersonalSunnyChartSrEntry>? Entries { get; set; }
     }
 }

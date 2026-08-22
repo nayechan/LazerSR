@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using LazerSR.SunnyCalculator;
 using LazerSR.SunnyCalculator.Tuning;
 using osu.Game.Beatmaps;
@@ -31,7 +32,6 @@ public static class PersonalSunnyService
     public static bool IsBaking { get; private set; }
     public static int BakeTotal { get; private set; }
     public static int BakeDone { get; private set; }
-    public static int QueueCount => PersonalSunnyQueueStore.Entries.Count;
     public static double Alpha { get; private set; }
     public static double Beta { get; private set; }
     public static int FitRecordCount { get; private set; }
@@ -39,10 +39,43 @@ public static class PersonalSunnyService
     /// <summary>Bumped whenever any of the state above changes - the widget compares this each frame instead of subscribing to an event.</summary>
     public static int Version { get; private set; }
 
+    /// <summary>
+    /// Set by <c>Patches/PersonalSunnyGameplayActivityPatch.cs</c> - true while a <c>Player</c> screen is
+    /// current. Read by <see cref="currentParallelism"/> so the background warmup worker (and, harmlessly,
+    /// the reactive collect path - it can only ever run from song select anyway) backs off during real
+    /// gameplay instead of competing with it for CPU.
+    /// </summary>
+    public static volatile bool GameplayActive;
+
     private static readonly object pipeline_lock = new();
+    private static readonly object progress_lock = new();
 
     private static BeatmapManager? beatmapManager;
     private static RulesetInfo? maniaRuleset;
+
+    /// <summary>Generous headroom for the broad-phase free filter per bucket - see the 2026-08-20 design discussion for why this is a fixed constant rather than derived.</summary>
+    private const int free_filter_margin = 2000;
+
+    /// <summary>Full concurrency normally; drops to 1 (no parallelism) while <see cref="GameplayActive"/> - a soft throttle, not a hard pause.</summary>
+    private static int currentParallelism() => GameplayActive ? 1 : Environment.ProcessorCount;
+
+    private static int backgroundWarmupStarted;
+
+    /// <summary>
+    /// Starts the one-shot proactive background pre-computation - the exact same pipeline
+    /// <see cref="CollectFromRealmAsync"/> runs for the collect button, just triggered automatically
+    /// (from <c>PersonalSunnyWidget</c>'s first load) instead of by a click, so both pools are already
+    /// warm by the time the player would otherwise wait on them. Idempotent - a second call (e.g. the
+    /// widget loading again on another screen) is a no-op. Not tied to the calling widget's lifecycle;
+    /// keeps running across screen transitions since it's just a background <see cref="Task"/>.
+    /// </summary>
+    public static void StartBackgroundWarmup(RealmAccess realm, IAPIProvider api)
+    {
+        if (Interlocked.CompareExchange(ref backgroundWarmupStarted, 1, 0) != 0)
+            return;
+
+        Task.Run(() => CollectFromRealmAsync(realm, api));
+    }
 
     static PersonalSunnyService()
     {
@@ -77,11 +110,16 @@ public static class PersonalSunnyService
                 return;
 
             var (rate, chartMod) = PersonalSunnyModWhitelist.Describe(scoreInfo.Mods);
+            var key = new PersonalSunnyJacKey(scoreInfo.BeatmapInfo!.MD5Hash, rate, chartMod);
 
-            var entry = new PersonalSunnyQueueEntry(
-                scoreInfo.BeatmapInfo!.MD5Hash, rate, chartMod, scoreInfo.Accuracy, scoreInfo.Date);
+            offerToTopPool(key, scoreInfo.Accuracy, scoreInfo.Date);
 
-            PersonalSunnyQueueStore.Add(entry);
+            if (PersonalSunnyChartSrStore.TryGet(key, out double sr) && passesRecentPoolFloor(sr, scoreInfo.Accuracy))
+            {
+                var entry = new PersonalSunnyQueueEntry(key.BeatmapMd5, key.Rate, key.ChartMod, scoreInfo.Accuracy, scoreInfo.Date);
+                PersonalSunnyQueueStore.Add(entry);
+            }
+
             runPipeline();
         }
         catch (Exception e)
@@ -89,6 +127,42 @@ public static class PersonalSunnyService
             HookLog.Write($"[LazerSR] PersonalSunnyService.RecordScore failed: {e}");
         }
     }
+
+    /// <summary>
+    /// Resolves one chart's universal SR (cache-first via <see cref="resolveUniversalSr"/>) and offers it
+    /// to <see cref="PersonalSunnyTopPoolStore"/> - the automatic-path equivalent of one step of
+    /// <see cref="runBroadPhase"/>, minus the free filter and parallelism (neither is needed for a single
+    /// new chart). Also what populates <see cref="PersonalSunnyChartSrStore"/> for <see cref="RecordScore"/>'s
+    /// own <see cref="passesRecentPoolFloor"/> check right after it.
+    /// </summary>
+    private static void offerToTopPool(PersonalSunnyJacKey key, double accuracy, DateTimeOffset endedAt)
+    {
+        if (beatmapManager == null || maniaRuleset == null)
+            return; // Dependencies never resolved - the top pool just won't see this one until a full re-collect.
+
+        double sr = resolveUniversalSr(key);
+        if (double.IsNaN(sr))
+            return;
+
+        PersonalSunnyTopPoolStore.Offer(new PersonalSunnyTopPoolEntry(key.BeatmapMd5, key.Rate, key.ChartMod, sr, accuracy, endedAt));
+    }
+
+    /// <summary>
+    /// Pool B's floor - flat, not Performance-relative. A relative floor (fraction of Pool A's ceiling)
+    /// forces low-SR charts to carry near-saturated accuracy just to clear it, which packs the low end of
+    /// the fit with (low SR, near-max Y) points and over-steepens the ridge slope. 0.85 matches the
+    /// outlier cutoff from the 2026-08-21 analysis (real outlier at 0.1347, next legitimate value 0.4238,
+    /// normal tail from ~0.60) - see the 2026-08-21 design discussion for the full reasoning.
+    /// </summary>
+    private const double recent_pool_accuracy_floor = 0.85;
+
+    /// <summary>
+    /// Floor for Pool B: a chart only qualifies if its accuracy clears <see cref="recent_pool_accuracy_floor"/>,
+    /// regardless of the chart's own SR - "recent, and an honest attempt" rather than "recent, whatever it
+    /// was". <paramref name="sr"/> is intentionally unused; kept in the signature to match the call sites,
+    /// which already have it in hand from resolving the chart's SR beforehand.
+    /// </summary>
+    private static bool passesRecentPoolFloor(double sr, double accuracy) => accuracy >= recent_pool_accuracy_floor;
 
     private static bool qualifies(ScoreInfo scoreInfo, int? localUserOnlineId)
     {
@@ -104,9 +178,11 @@ public static class PersonalSunnyService
     }
 
     /// <summary>
-    /// Bulk backfill from local realm history - up to <see cref="PersonalSunnyQueueStore.MaxEntries"/>
-    /// of the player's own most recent qualifying mania 4K passes, replacing the current queue. Call on
-    /// a background thread (this itself is synchronous).
+    /// Bulk backfill from local realm history. Populates both pools: the top-<see cref="PersonalSunnyTopPoolStore.Capacity"/>
+    /// by-universal-SR "skill ceiling" pool (<see cref="PersonalSunnyTopPoolStore"/>, via <see cref="runBroadPhase"/>)
+    /// from every qualifying chart, and the recent-<see cref="PersonalSunnyQueueStore.MaxEntries"/> FIFO
+    /// (<see cref="PersonalSunnyQueueStore"/>) from the player's most recent qualifying passes. Call on a
+    /// background thread (this itself is synchronous).
     /// </summary>
     public static void CollectFromRealmAsync(RealmAccess realm, IAPIProvider api)
     {
@@ -114,10 +190,10 @@ public static class PersonalSunnyService
         {
             int localUserId = api.LocalUser.Value.Id;
 
-            var collected = realm.Run(r =>
+            // ScoreInfo.Passed is [Ignored] (not a persisted realm column) - it can't appear in a
+            // realm-side LINQ predicate. qualifies() below re-checks it per candidate.
+            var qualifying = realm.Run(r =>
             {
-                // ScoreInfo.Passed is [Ignored] (not a persisted realm column) - it can't appear in a
-                // realm-side LINQ predicate. qualifies() below already re-checks it per candidate.
                 var candidates = r.All<ScoreInfo>()
                                   .Where(s => !s.DeletePending)
                                   .OrderByDescending(s => s.Date)
@@ -127,9 +203,6 @@ public static class PersonalSunnyService
 
                 foreach (var score in candidates)
                 {
-                    if (result.Count >= PersonalSunnyQueueStore.MaxEntries)
-                        break;
-
                     if (!qualifies(score, localUserId))
                         continue;
 
@@ -137,17 +210,138 @@ public static class PersonalSunnyService
                     result.Add(new PersonalSunnyQueueEntry(score.BeatmapInfo!.MD5Hash, rate, chartMod, score.Accuracy, score.Date));
                 }
 
-                // Oldest first, to match the FIFO order Add() would have produced.
-                result.Reverse();
-                return result;
+                return result; // still date-descending, since candidates was.
             });
 
-            ReplaceQueueAndRun(collected);
+            // Top pool first (no pipeline run yet) - broad-phase over every qualifying chart. Also
+            // populates PersonalSunnyChartSrStore, which the recent-pool floor below reads from.
+            runBroadPhase(qualifying);
+
+            // Recent pool: walk qualifying (already date-descending) picking the first MaxEntries that
+            // also clear passesRecentPoolFloor - "recent AND still representative", not just "recent".
+            var recent = new List<PersonalSunnyQueueEntry>();
+
+            foreach (var entry in qualifying)
+            {
+                if (recent.Count >= PersonalSunnyQueueStore.MaxEntries)
+                    break;
+
+                var key = PersonalSunnyJacKey.From(entry);
+
+                if (!PersonalSunnyChartSrStore.TryGet(key, out double sr))
+                    continue; // Broad-phase never ranked this chart (shouldn't normally happen) - skip rather than guess.
+
+                if (!passesRecentPoolFloor(sr, entry.Accuracy))
+                    continue;
+
+                recent.Add(entry);
+            }
+
+            recent.Reverse(); // oldest first, to match the FIFO order Add() would have produced.
+
+            // The single pipeline run (bake+refit) that reflects both pools.
+            ReplaceQueueAndRun(recent);
         }
         catch (Exception e)
         {
             HookLog.Write($"[LazerSR] PersonalSunnyService.CollectFromRealmAsync failed: {e}");
         }
+    }
+
+    /// <summary>
+    /// Free-filter -> parallel cheap-SR broad-phase -> <see cref="PersonalSunnyTopPoolStore"/>. Ranks by
+    /// <see cref="BeatmapInfo.StarRating"/> (osu!'s own already-computed, NoMod value - free to read) as a
+    /// proxy, split into three buckets - NM / DT&#183;NC@1.5x / HT&#183;DC@0.75x, since rate is now exactly one
+    /// of those three (<see cref="PersonalSunnyModWhitelist"/> only allows osu!-ranked rates) - so a
+    /// rate-modded chart's true (higher or lower) difficulty never has to compete against an NM chart's
+    /// raw stored value in one shared ranking. Each bucket is capped at <see cref="free_filter_margin"/>
+    /// before the real (but still cheap - one sunny call) universal SR gets computed, in parallel, only
+    /// for survivors - see the 2026-08-20 design discussion for the full reasoning.
+    /// </summary>
+    private static void runBroadPhase(IReadOnlyList<PersonalSunnyQueueEntry> qualifying)
+    {
+        if (beatmapManager == null || maniaRuleset == null)
+            return; // Dependencies never resolved (widget never loaded) - nothing to rank with.
+
+        // Chart-level dedup: the best (highest-accuracy) occurrence represents a chart here, not the most
+        // recent one (2026-08-22 fix) - this feeds Offer(), and Pool A is the "skill ceiling" pool, so a
+        // worse-but-more-recent replay should never crowd out a personal best from ever being considered.
+        // Same SR for every occurrence of a given key (fixed by map+rate+mod), so comparing by raw accuracy
+        // is equivalent to comparing by Performance here, without needing SR resolved yet.
+        var perChart = new Dictionary<PersonalSunnyJacKey, PersonalSunnyQueueEntry>();
+
+        foreach (var entry in qualifying)
+        {
+            var key = PersonalSunnyJacKey.From(entry);
+            if (!perChart.TryGetValue(key, out var existing) || entry.Accuracy > existing.Accuracy)
+                perChart[key] = entry;
+        }
+
+        var nm = new List<(PersonalSunnyJacKey Key, PersonalSunnyQueueEntry Entry, double Proxy)>();
+        var dt = new List<(PersonalSunnyJacKey Key, PersonalSunnyQueueEntry Entry, double Proxy)>();
+        var ht = new List<(PersonalSunnyJacKey Key, PersonalSunnyQueueEntry Entry, double Proxy)>();
+
+        foreach (var (key, entry) in perChart)
+        {
+            var local = beatmapManager.QueryBeatmap(b => b.MD5Hash == key.BeatmapMd5);
+            if (local == null)
+                continue; // Not downloaded locally any more - same handling as bakeOne.
+
+            var bucket = key.Rate > 1.0 ? dt : key.Rate < 1.0 ? ht : nm;
+            bucket.Add((key, entry, local.StarRating));
+        }
+
+        var survivors = new List<(PersonalSunnyJacKey Key, PersonalSunnyQueueEntry Entry)>();
+
+        foreach (var bucket in new[] { nm, dt, ht })
+        {
+            // StarRating is -1 when osu! hasn't computed it for this beatmap yet - can't rank that, so
+            // it passes the free filter unconditionally rather than being silently dropped.
+            survivors.AddRange(bucket.Where(c => c.Proxy < 0).Select(c => (c.Key, c.Entry)));
+            survivors.AddRange(bucket.Where(c => c.Proxy >= 0)
+                                      .OrderByDescending(c => c.Proxy)
+                                      .Take(free_filter_margin)
+                                      .Select(c => (c.Key, c.Entry)));
+        }
+
+        // BeatmapManager.QueryBeatmap/GetWorkingBeatmap both go through Realm.Run/WorkingBeatmapCache's own
+        // lock internally, so they're safe to call concurrently from here (verified against osu! source).
+        Parallel.ForEach(survivors, new ParallelOptions { MaxDegreeOfParallelism = currentParallelism() }, candidate =>
+        {
+            try
+            {
+                double sr = resolveUniversalSr(candidate.Key);
+                if (double.IsNaN(sr))
+                    return;
+
+                PersonalSunnyTopPoolStore.Offer(new PersonalSunnyTopPoolEntry(
+                    candidate.Key.BeatmapMd5, candidate.Key.Rate, candidate.Key.ChartMod, sr,
+                    candidate.Entry.Accuracy, candidate.Entry.EndedAt));
+            }
+            catch (Exception e)
+            {
+                HookLog.Write($"[LazerSR] PersonalSunnyService broad-phase failed for {candidate.Key}: {e}");
+            }
+        });
+    }
+
+    /// <summary>Universal-point sunny SR for one chart, via <see cref="PersonalSunnyChartSrStore"/> so it's computed at most once, ever.</summary>
+    private static double resolveUniversalSr(PersonalSunnyJacKey key)
+    {
+        if (PersonalSunnyChartSrStore.TryGet(key, out double cached))
+            return cached;
+
+        var local = beatmapManager!.QueryBeatmap(b => b.MD5Hash == key.BeatmapMd5);
+        if (local == null)
+            return double.NaN;
+
+        var working = beatmapManager.GetWorkingBeatmap(local);
+        var mods = PersonalSunnyModWhitelist.Reconstruct(key.Rate, key.ChartMod);
+        var playable = working.GetPlayableBeatmap(maniaRuleset!, mods, CancellationToken.None);
+
+        double sr = PersonalJacobianBaker.CalculateUniversalSr(playable, mods);
+        PersonalSunnyChartSrStore.Put(key, sr);
+        return sr;
     }
 
     /// <summary>
@@ -183,12 +377,31 @@ public static class PersonalSunnyService
         }
     }
 
+    /// <summary>
+    /// Pool A (top-Performance ceiling) union Pool B (recent), concatenated - NOT deduped. A chart that lands in
+    /// both pools deliberately counts twice in the fit (same precedent as Arcaea's b30+r10: overlap
+    /// between "best" and "recent" isn't collapsed there either). The pools' own stores are untouched
+    /// here - eviction/FIFO semantics belong to them alone (<see cref="PersonalSunnyTopPoolStore"/>/
+    /// <see cref="PersonalSunnyQueueStore"/>).
+    /// </summary>
+    private static List<(PersonalSunnyJacKey Key, double Accuracy, DateTimeOffset EndedAt)> combinedEntries()
+    {
+        var combined = new List<(PersonalSunnyJacKey Key, double Accuracy, DateTimeOffset EndedAt)>();
+
+        foreach (var entry in PersonalSunnyTopPoolStore.Entries)
+            combined.Add((entry.Key, entry.Accuracy, entry.EndedAt));
+
+        foreach (var entry in PersonalSunnyQueueStore.Entries)
+            combined.Add((PersonalSunnyJacKey.From(entry), entry.Accuracy, entry.EndedAt));
+
+        return combined;
+    }
+
     private static void bakeMissing()
     {
-        var queue = PersonalSunnyQueueStore.Entries;
-        var queueKeys = queue.Select(PersonalSunnyJacKey.From).Distinct().ToList();
+        var keys = combinedEntries().Select(c => c.Key).Distinct().ToList();
 
-        var missing = queueKeys.Where(k => !PersonalSunnyJacStore.TryGet(k, out _)).ToList();
+        var missing = keys.Where(k => !PersonalSunnyJacStore.TryGet(k, out _)).ToList();
 
         BakeTotal = missing.Count;
         BakeDone = 0;
@@ -203,12 +416,19 @@ public static class PersonalSunnyService
             return;
         }
 
-        foreach (var key in missing)
+        // Independent per-chart work (own beatmap conversion, own PersonalJacobianBaker.Bake call) -
+        // safe to run in parallel the same way runBroadPhase does. BakeDone/Version updates are the only
+        // shared mutable state touched directly here, so those alone need the lock.
+        Parallel.ForEach(missing, new ParallelOptions { MaxDegreeOfParallelism = currentParallelism() }, key =>
         {
             bakeOne(key);
-            BakeDone++;
-            Version++;
-        }
+
+            lock (progress_lock)
+            {
+                BakeDone++;
+                Version++;
+            }
+        });
     }
 
     private static void bakeOne(PersonalSunnyJacKey key)
@@ -235,22 +455,24 @@ public static class PersonalSunnyService
 
     private static void refit()
     {
-        var queue = PersonalSunnyQueueStore.Entries;
-        var queueKeys = queue.Select(PersonalSunnyJacKey.From).ToList();
+        var combined = combinedEntries();
 
-        PersonalSunnyJacStore.PruneTo(queueKeys.Distinct());
+        // PersonalSunnyJacStore only ever needs to hold what's actually in the fit, so it's pruned to
+        // this set. PersonalSunnyChartSrStore is deliberately NOT pruned here - it's the broad-phase
+        // ranking cache and legitimately holds far more charts than ever make the top/recent pools.
+        PersonalSunnyJacStore.PruneTo(combined.Select(c => c.Key).Distinct());
 
         var y = new List<double>();
         var sr0 = new List<double>();
         var jac = new List<double[]>();
 
-        foreach (var entry in queue)
+        foreach (var (key, accuracy, _) in combined)
         {
-            if (!PersonalSunnyJacStore.TryGet(PersonalSunnyJacKey.From(entry), out var baked))
+            if (!PersonalSunnyJacStore.TryGet(key, out var baked))
                 continue;
 
-            double accuracy = Math.Min(entry.Accuracy, 1.0 - 1e-6);
-            y.Add(-Math.Log(1.0 - accuracy));
+            double clampedAccuracy = Math.Min(accuracy, 1.0 - 1e-6);
+            y.Add(-Math.Log(1.0 - clampedAccuracy));
             sr0.Add(baked.Sr0);
             jac.Add(baked.Jacobian);
         }

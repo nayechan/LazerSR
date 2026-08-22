@@ -34,7 +34,7 @@ namespace LazerSR.Hook.Widgets;
 /// Song-select-only widget for the personal sunny+ diff. Two rows.
 /// <para>
 /// <b>위(pill)</b>: 좌측은 지금 스코프된 맵의 <i>개인화</i> sunnySR(만인 + 개인 diff),
-/// 우측은 이 사람이 정확도 96%를 뽑아내는 sunny 값 — 큐에 쌓인 기록으로 적합한 α/β의 역산일 뿐,
+/// 우측은 이 사람이 정확도 95%를 뽑아내는 sunny 값 — 큐에 쌓인 기록으로 적합한 α/β의 역산일 뿐,
 /// 맵과 무관한 "실력" 숫자다.
 /// </para>
 /// <para>
@@ -101,7 +101,7 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
     private ModSettingChangeTracker? modTracker;
     private int lastServiceVersion = -1;
 
-    private const double target_accuracy = 0.96;
+    private const double target_accuracy = 0.95;
 
     public PersonalSunnyWidget()
     {
@@ -249,6 +249,11 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
         if (beatmapManager != null && rulesetStore != null)
             PersonalSunnyService.EnsureDependencies(beatmapManager, rulesetStore);
 
+        // Proactive one-shot pre-computation - idempotent, so this widget loading again on another
+        // screen (or a fresh song-select visit) is a harmless no-op after the first time.
+        if (realmAccess != null && api != null)
+            PersonalSunnyService.StartBackgroundWarmup(realmAccess, api);
+
         ruleset?.BindValueChanged(_ => scheduleRecalculate());
         beatmap?.BindValueChanged(_ => scheduleRecalculate());
 
@@ -331,7 +336,7 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
         }, ct);
     }
 
-    // ── 우측 pill: 정확도 96%를 뽑아내는 sunny 값 ─────────────────────────────
+    // ── 우측 pill: 정확도 95%를 뽑아내는 sunny 값 ─────────────────────────────
 
     private void refreshTargetPill()
     {
@@ -371,7 +376,10 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
         }
         else
         {
-            queueLabel.Text = $"{PersonalSunnyService.QueueCount}/{PersonalSunnyQueueStore.MaxEntries}";
+            // Pool A(상위300)∪Pool B(최근100)를 dedup한 뒤 실제 ridge fit에 들어간 개수 - 두 풀을
+            // 따로 보여주면 유저가 겹침을 직접 빼가며 계산해야 해서, 합산된 이 값 하나만 보여준다.
+            // 버튼("리플레이 수집") 폭 때문에 라벨 공간이 좁아 짧게 유지.
+            queueLabel.Text = $"데이터 {PersonalSunnyService.FitRecordCount}개";
         }
     }
 
