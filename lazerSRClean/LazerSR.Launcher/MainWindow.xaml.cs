@@ -65,6 +65,7 @@ public partial class MainWindow : Window
         psi.Environment["DOTNET_STARTUP_HOOKS"] = hookDll;
         psi.Environment["OSU_EXTERNAL_UPDATE_PROVIDER"] = "1";
         psi.Environment["OSU_DISABLE_ERROR_REPORTING"] = "1";
+        psi.Environment["LAZERSR_SUNNYPLUS"] = SunnyPlusCheckBox.IsChecked == true ? "1" : "0";
 
         try { _osuProcess = Process.Start(psi); }
         catch (Exception ex) { StatusTextBlock.Text = $"Launch failed: {ex.Message}"; return; }
@@ -81,6 +82,12 @@ public partial class MainWindow : Window
 
         StatusTextBlock.Text = $"osu! launched (PID {_osuProcess.Id})";
         StartPipeClient(_osuProcess.Id);
+    }
+
+    private async void SunnyPlusCheckBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_pipeClient == null) return;
+        await _pipeClient.SendAsync(SunnyPlusCheckBox.IsChecked == true ? "sunnyplus:on" : "sunnyplus:off");
     }
 
     private void StartPipeClient(int osuPid)

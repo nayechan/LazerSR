@@ -170,3 +170,35 @@ ppy가 hook 탐지 로직을 추가할 가능성은 낮지만 0은 아니다 (`s
 ## 알려진 미해결 이슈
 
 (2026-07-12 감사 항목이었던 `ManiaDifficultyHitObject` 상속 위험과 `DifficultyIconTooltipPatch` static bool 버그는 2026-07-17에 수정 완료 — 둘 다 안전 레드라인과는 무관한 안정성/기능 이슈였음, `architecture.md` §6 참고.)
+
+## 패턴 복제 모드 (2026-08-21)
+
+무한 트레이닝과 **동일한 완전 로컬 세션**이다. 위 "무한 트레이닝의 서버 격리" 표의 차단 5개를 그대로 따른다 —
+`Player` 직접 상속(제출 토큰·점수 제출·관전 브로드캐스트 경로 자체가 없음), `InitialActivity => null`,
+`ShowResults = false`, `ImportScore` override, `CreateResults`는 `NotSupportedException`.
+노트 런타임 주입에 대한 판단도 무한 트레이닝과 같다(`Playfield.Add`는 일반 public API이고, 이 세션의
+스코어는 제출도 realm 기록도 되지 않는다).
+
+### 새로 생긴 것 1 — 외부 프로그램에서 오는 노트 스트림
+
+newScreen이 Named Pipe로 보내온 노트를 주입한다. 받은 값으로 하는 일은 `Playfield.Add`와
+`HoldNoteTruncator.Truncate`(우리가 주입한 노트의 `Duration` 수정)뿐이다.
+**라이브 `ScoreProcessor`/`HealthProcessor`에는 쓰지 않으며**, 판정은 osu!가 주입된 노트를 정상 처리한 결과다.
+파이프는 로컬 IPC이므로 레드라인 2(네트워크)에 해당하지 않는다.
+
+### 새로 생긴 것 2 — 비포커스 입력 릴레이 (`RawKeyRelay`)
+
+**이 프로젝트에서 처음으로 게임플레이에 입력을 넣는 기능**이므로 경계를 분명히 해둔다.
+
+- 넣는 것은 **사용자가 실제로 누른 하드웨어 키**다. Raw Input(`RIDEV_INPUTSINK`)으로 받은 것을
+  **전달만** 하며 `SendInput` 같은 합성 입력은 어디에도 쓰지 않는다. 자동 연주가 아니다.
+- **대상 게임의 입력 경로는 전혀 건드리지 않는다.** 그 게임이 포커스를 쥐고 원본 입력을 그대로 받으므로,
+  그쪽 핵 방지에 걸릴 여지가 구조적으로 없다.
+- **패턴 복제 모드의 수명에 정확히 묶여 있다** — `PatternCopyPlayer.OnEntering`에서 시작하고
+  `OnExiting`에서 해제하며, 핸들러도 `Host.AvailableInputHandlers`에서 제거한다.
+  상시 켜져 있으면 성격이 달라지는 기능이므로 이 경계를 반드시 유지할 것.
+- 이 세션의 스코어는 제출되지도 realm에 기록되지도 않는다.
+
+### `HookLog`는 계속 no-op이어야 한다
+
+패턴 복제 디버깅 중 한시적으로 파일 기록으로 바꿨다가 되돌렸다(2026-08-21). 기본은 no-op이다(§`architecture.md` §5).
