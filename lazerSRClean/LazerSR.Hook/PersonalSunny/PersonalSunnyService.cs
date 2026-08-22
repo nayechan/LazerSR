@@ -170,14 +170,16 @@ public static class PersonalSunnyService
     private static bool passesRecentPoolFloor(double sr, double accuracy) => accuracy >= recent_pool_accuracy_floor;
 
     /// <summary>
-    /// Pool B contributes only its best <see cref="recent_pool_effective_count"/> (by Performance) out of
+    /// Pool B contributes only its best <see cref="RecentPoolEffectiveCount"/> (by Performance) out of
     /// <see cref="PersonalSunnyQueueStore.MaxEntries"/> most-recent plays to the fit - mirrors Arcaea's
     /// potential system, where Recent10 is the 10 highest Play Ratings out of the 30 most recent plays
     /// (same ~1:2 ratio here as Arcaea's ~1:3), each chart counted once by its best occurrence in that
     /// window. <see cref="PersonalSunnyQueueStore"/> itself is untouched - still the full 100-entry FIFO
     /// window; this reduction only happens where <see cref="combinedEntries"/> builds the fit input.
+    /// Public (unlike the other pool constants living as private consts here) so the widget can show it
+    /// as Pool B's denominator alongside <see cref="PersonalSunnyTopPoolStore.Capacity"/> for Pool A.
     /// </summary>
-    private const int recent_pool_effective_count = 50;
+    public const int RecentPoolEffectiveCount = 50;
 
     private static bool qualifies(ScoreInfo scoreInfo, int? localUserOnlineId)
     {
@@ -190,6 +192,21 @@ public static class PersonalSunnyService
         if (!PersonalSunnyModWhitelist.IsAllowed(scoreInfo.Mods)) return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// <see cref="PersonalSunnyTopPoolStore.Clear"/> then <see cref="CollectFromRealmAsync"/> - the manual
+    /// "리플레이 수집" button's entry point (2026-08-22). Pool B already gets a full replace on every
+    /// collect (<see cref="ReplaceQueueAndRun"/>), but Pool A's <see cref="PersonalSunnyTopPoolStore.Offer"/>
+    /// only ever improves in place, so without this, a manual re-collect after a pool-logic change (a
+    /// capacity change, say) would converge toward the new logic's result over several collects rather
+    /// than reflecting it immediately. Not used by the background warmup or real-time score path - those
+    /// stay incremental on purpose.
+    /// </summary>
+    public static void ResetAndCollectFromRealmAsync(RealmAccess realm, IAPIProvider api)
+    {
+        PersonalSunnyTopPoolStore.Clear();
+        CollectFromRealmAsync(realm, api);
     }
 
     /// <summary>
@@ -401,7 +418,7 @@ public static class PersonalSunnyService
     }
 
     /// <summary>
-    /// Pool A (top-Performance ceiling) union Pool B's <see cref="recent_pool_effective_count"/>-best
+    /// Pool A (top-Performance ceiling) union Pool B's <see cref="RecentPoolEffectiveCount"/>-best
     /// reduction, concatenated - NOT deduped against each other. A chart that lands in both pools
     /// deliberately counts twice in the fit (same precedent as Arcaea's b30+r10: overlap between "best"
     /// and "recent" isn't collapsed there either). The pools' own stores are untouched here - eviction/FIFO
@@ -415,9 +432,9 @@ public static class PersonalSunnyService
         foreach (var entry in PersonalSunnyTopPoolStore.Entries)
             combined.Add((entry.Key, entry.Accuracy, entry.EndedAt, false));
 
-        // Recent pool -> best recent_pool_effective_count by Performance, one occurrence per chart (the
+        // Recent pool -> best RecentPoolEffectiveCount by Performance, one occurrence per chart (the
         // best one) within the MaxEntries-most-recent window - mirrors Arcaea's Recent10 (see
-        // recent_pool_effective_count's doc). PersonalSunnyQueueStore.Entries is already that raw window.
+        // RecentPoolEffectiveCount's doc). PersonalSunnyQueueStore.Entries is already that raw window.
         var recentBest = PersonalSunnyQueueStore.Entries
                                                   .GroupBy(PersonalSunnyJacKey.From)
                                                   .Select(g => g.OrderByDescending(e => e.Accuracy).First())
@@ -429,7 +446,7 @@ public static class PersonalSunnyService
                                                       return (Key: key, Entry: e, Performance: performance);
                                                   })
                                                   .OrderByDescending(x => x.Performance)
-                                                  .Take(recent_pool_effective_count);
+                                                  .Take(RecentPoolEffectiveCount);
 
         foreach (var (key, entry, _) in recentBest)
             combined.Add((key, entry.Accuracy, entry.EndedAt, true));

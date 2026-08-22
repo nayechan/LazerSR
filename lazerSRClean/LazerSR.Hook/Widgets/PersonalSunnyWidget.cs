@@ -376,11 +376,13 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
         }
         else
         {
-            // 풀별로 실제 fit에 들어간 개수를 따로 보여준다(2026-08-22) - Pool A("전체 기간")와
-            // Pool B("최근", Arcaea r10식 최근 100개 중 상위 50개 축소)는 성격이 달라서 합산 하나보다
-            // 이렇게 나눠 보여주는 쪽이 지금 뭘 보고 있는지 더 명확하다.
-            queueLabel.Text = $"데이터 총 {PersonalSunnyService.FitRecordCount}개 " +
-                               $"(전체 기간 {PersonalSunnyService.TopPoolRecordCount}개 / 최근 {PersonalSunnyService.RecentPoolRecordCount}개)";
+            // 풀별로 "그 풀 자체 상한 대비 분수"를 보여준다(2026-08-22) - Pool A("최고")는 정원
+            // PersonalSunnyTopPoolStore.Capacity, Pool B("최근")는 fit에 실제 반영되는 상한
+            // RecentPoolEffectiveCount(원본 100개 윈도우가 아니라 그중 축소된 50) 대비. 총합 하나로
+            // 합치면 두 풀의 성격이 다른 게 안 드러나고, raw+반영 혼합 표기는 숫자 자체가 의미가
+            // 없어져서(예: Pool B 원본이 늘어도 개인화엔 영향 없는데 총합만 커짐) 이 분수 표기로 확정.
+            queueLabel.Text = $"최고 {PersonalSunnyService.TopPoolRecordCount}/{PersonalSunnyTopPoolStore.Capacity} · " +
+                               $"최근 {PersonalSunnyService.RecentPoolRecordCount}/{PersonalSunnyService.RecentPoolEffectiveCount}";
         }
     }
 
@@ -395,7 +397,7 @@ public partial class PersonalSunnyWidget : CompositeDrawable, ISerialisableDrawa
         {
             try
             {
-                PersonalSunnyService.CollectFromRealmAsync(realmAccess, api);
+                PersonalSunnyService.ResetAndCollectFromRealmAsync(realmAccess, api);
             }
             catch (Exception e)
             {

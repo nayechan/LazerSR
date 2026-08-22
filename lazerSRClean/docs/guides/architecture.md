@@ -647,6 +647,7 @@ v1(2026-08-19)은 최근 100개 FIFO 하나뿐이었다. 문제: 정확도로 �
 Pool A — 상위 200 ("실력 천장", Performance 기준, PersonalSunnyTopPoolEntry.Performance)
   ordered map: Dictionary<ChartKey,Entry>(존재조회) + SortedSet<(Performance,ChartKey)>(정렬·min-eviction)
   PersonalSunnyTopPoolStore, capacity 200(2026-08-22, 300에서 축소), 재도전 시 Performance가 기존보다 높을 때만 in-place 갱신(2026-08-22 수정 - 원래 무조건 덮어써서 더 나쁜 재도전이 개인 최고 기록을 지워버리는 버그가 있었음, 실측으로 확인)
+  schema_version 2(2026-08-22, 300->200 캐패시티 변경으로 bump - 이 값이 안 맞는 파일은 로드 시 그냥 버려짐. 이 풀의 캐패시티/랭킹공식/eviction 의미가 바뀔 때마다 반드시 같이 bump할 것 - Pool B(QueueStore)와 달리 Offer()는 항상 "더 나을 때만" 갱신이라 옛 파일이 새 로직으로 저절로 안 맞춰짐)
 
 Pool B — 최근 100 중 상위 50 (평소 실력, 정확도 85% 고정 하한)
   PersonalSunnyQueueStore, FIFO 100개, dedup 없음 - 저장 자체는 그대로
@@ -691,7 +692,9 @@ osu! 자신의 `BeatmapUpdater`(임포트 시 스레드풀로 별점을 미리 �
 
 ### 위젯 — `Widgets/PersonalSunnyWidget.cs`
 
-선곡 화면 전용(`GameplayState`가 잡히면 그리지 않음 — `SkinWidgetRegistrarPatch`가 HUD/선곡 두 툴박스에 다 노출시키므로 §16과 같은 이유로 자체 판별 필요). 위쪽에 pill 2개 — 현재 스코프된 맵의 (만인+개인) sunnySR, 그리고 이 사람이 정확도 95%를 뽑는 sunny 값(맵과 무관, α·β 역산). 아래쪽은 굽는 중이면 진행률 막대, 아니면 **`"데이터 총 {FitRecordCount}개 (전체 기간 {TopPoolRecordCount}개 / 최근 {RecentPoolRecordCount}개)"` + 수집 버튼**(2026-08-22, 풀별 개수를 따로 노출 — 이전엔 합산값 하나만 보여줬음).
+선곡 화면 전용(`GameplayState`가 잡히면 그리지 않음 — `SkinWidgetRegistrarPatch`가 HUD/선곡 두 툴박스에 다 노출시키므로 §16과 같은 이유로 자체 판별 필요). 위쪽에 pill 2개 — 현재 스코프된 맵의 (만인+개인) sunnySR, 그리고 이 사람이 정확도 95%를 뽑는 sunny 값(맵과 무관, α·β 역산). 아래쪽은 굽는 중이면 진행률 막대, 아니면 **`"최고 {TopPoolRecordCount}/{PersonalSunnyTopPoolStore.Capacity} · 최근 {RecentPoolRecordCount}/{RecentPoolEffectiveCount}"` + 수집 버튼**(2026-08-22) — 각 풀을 "그 풀 자체 상한 대비 분수"로 보여준다. 총합 하나로 합치거나 raw+반영을 섞어 보여주는 방식도 검토했으나, 전자는 두 풀의 성격 차이가 안 드러나고 후자는 Pool B 원본이 늘어도 개인화엔 영향 없는데 숫자만 커지는 문제가 있어 이 분수 표기로 확정.
+
+수집 버튼(`onCollectClicked`)은 `PersonalSunnyService.ResetAndCollectFromRealmAsync`를 부른다(2026-08-22 신규) — `PersonalSunnyTopPoolStore.Clear()` 후 `CollectFromRealmAsync`. Pool B는 `ReplaceQueueAndRun`이 매 수집마다 전체 교체라 이미 매번 리셋되지만, Pool A는 `Offer()`가 항상 "더 나을 때만 갱신"이라 그 자체로는 절대 안 비워진다 — 캐패시티·랭킹 공식이 바뀌어도 이미 저장된 파일이 새 로직에 맞게 저절로 줄어들거나 재정렬되지 않는다는 뜻. 그래서 수동 버튼은 명시적으로 Pool A를 비우고 처음부터 다시 채운다(자동 백그라운드 워밍업/실시간 `RecordScore` 경로는 그대로 증분 유지 — 매번 통째로 다시 도는 건 낭비).
 
 ---
 

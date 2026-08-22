@@ -33,7 +33,16 @@ public static class PersonalSunnyTopPoolStore
 {
     public const int Capacity = 200;
 
-    private const int schema_version = 1;
+    /// <summary>
+    /// Bump whenever a change to this pool's capacity, ranking formula, or eviction/replace semantics
+    /// would make an already-saved file inconsistent with the new logic - <see cref="Offer"/> only ever
+    /// improves the pool in place, so unlike <see cref="PersonalSunnyQueueStore"/> (fully replaced on
+    /// every collect), a stale file doesn't self-correct on its own without this. 2 as of 2026-08-22
+    /// (bumped for the 300->200 capacity cut - a 1-tagged file could be carrying up to 300 entries under
+    /// logic that now only trusts 200).
+    /// </summary>
+    private const int schema_version = 2;
+
     private const string folder_name = "personalsunny";
     private const string file_name = "top_pool.json";
 
@@ -73,6 +82,24 @@ public static class PersonalSunnyTopPoolStore
     {
         lock (mutation_lock)
             return byKey.ContainsKey(key);
+    }
+
+    /// <summary>
+    /// Empties the pool. Unlike <see cref="PersonalSunnyQueueStore"/>, which <see cref="PersonalSunnyService.ReplaceQueueAndRun"/>
+    /// already fully replaces on every collect, <see cref="Offer"/> only ever improves this pool in place
+    /// (a worse candidate is rejected, never wipes anything) - so pool logic changes (capacity, ranking
+    /// formula) don't retroactively fix an already-saved pool on their own. The manual "리플레이 수집"
+    /// button calls this before re-collecting so a full re-run is guaranteed to reflect current logic
+    /// exactly, not whatever converges from the old saved state (2026-08-22).
+    /// </summary>
+    public static void Clear()
+    {
+        lock (mutation_lock)
+        {
+            byKey.Clear();
+            ordered.Clear();
+            save();
+        }
     }
 
     /// <summary>
