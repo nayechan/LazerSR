@@ -672,7 +672,7 @@ Pool A는 원래 순수 SR로 뽑았으나(2026-08-20 설계), 실기 대조 결
     리스트로 같이 정렬하면 부당비교가 된다. 여유폭 2,000은 실측 데이터 없이 고정한 값(재검토 이슈).
 [2] Broad-phase — 생존자만 PersonalJacobianBaker.CalculateUniversalSr(1회 계산, Bake의 앞부분만
     떼어낸 것)를 병렬로 실행, 결과는 PersonalSunnyChartSrStore(경량 캐시, 채보당 평생 1회)에 저장
-[3] 정확한 상위 300 확정 → PersonalSunnyTopPoolStore.Offer
+[3] 정확한 상위 200 확정 → PersonalSunnyTopPoolStore.Offer
 [4] Narrow-phase — Pool A∪B에 대해서만 기존 23-sweep 자코비안 굽기(PersonalSunnyJacStore)
 ```
 
